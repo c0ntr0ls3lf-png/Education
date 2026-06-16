@@ -195,11 +195,13 @@ async function main() {
   await mongoose.disconnect();
 
   // Start Next.js dev server
-  console.log('\n🚀 Starting Next.js dev server...');
-  const next = spawn('npx', ['next', 'dev', '-p', '3000', '--no-turbopack'], {
+  const PORT = process.env.PORT || '3000';
+  process.env.PORT = PORT;
+  console.log(`\n🚀 Starting Next.js dev server on port ${PORT}...`);
+  const next = spawn('npx', ['next', 'dev', '-p', PORT, '--no-turbopack'], {
     cwd: __dirname,
     stdio: 'inherit',
-    env: process.env,
+    env: { ...process.env, PORT },
     shell: true,
   });
 

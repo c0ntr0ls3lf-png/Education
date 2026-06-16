@@ -119,7 +119,7 @@ async function fetchSubjectWithChapters(
     const decodedSubjectSlug = decodeURIComponent(subjectSlug)
 
     const classRes = await fetch(new URL('/api/classes?include=subjects', baseUrl), {
-      next: { revalidate: 60 },
+      cache: 'no-store',
     })
     if (!classRes.ok) return null
     const classes = await classRes.json()
@@ -133,7 +133,7 @@ async function fetchSubjectWithChapters(
 
     const chapterRes = await fetch(
       new URL(`/api/chapters?subjectId=${subject.id}`, baseUrl),
-      { next: { revalidate: 60 } }
+      { cache: 'no-store' }
     )
     if (!chapterRes.ok) return null
     const chapters = await chapterRes.json()
@@ -143,13 +143,13 @@ async function fetchSubjectWithChapters(
         try {
           const [explRes, creativeRes, mcqRes] = await Promise.all([
             fetch(new URL(`/api/explanations?chapterId=${chapter.id}`, baseUrl), {
-              next: { revalidate: 60 },
+              cache: 'no-store',
             }),
             fetch(new URL(`/api/creative-questions?chapterId=${chapter.id}`, baseUrl), {
-              next: { revalidate: 60 },
+              cache: 'no-store',
             }),
             fetch(new URL(`/api/mcq-questions?chapterId=${chapter.id}`, baseUrl), {
-              next: { revalidate: 60 },
+              cache: 'no-store',
             }),
           ])
           const explanations = explRes.ok ? await explRes.json() : []

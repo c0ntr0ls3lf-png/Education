@@ -106,7 +106,7 @@ async function fetchClassBySlug(slug: string): Promise<ClassData | null> {
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ||
     (process.env.PORT ? `http://localhost:${process.env.PORT}` : 'http://localhost:3001')
     const res = await fetch(new URL('/api/classes?include=subjects', baseUrl), {
-      next: { revalidate: 60 },
+      cache: 'no-store',
     })
     if (!res.ok) return null
     const data = await res.json()
@@ -118,7 +118,7 @@ async function fetchClassBySlug(slug: string): Promise<ClassData | null> {
     if (classItem.id) {
       const subjectsRes = await fetch(
         new URL(`/api/subjects?classId=${classItem.id}&include=chapters`, baseUrl),
-        { next: { revalidate: 60 } }
+        { cache: 'no-store' }
       )
       if (subjectsRes.ok) {
         const subjects = await subjectsRes.json()
