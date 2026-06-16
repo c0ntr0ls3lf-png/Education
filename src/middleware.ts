@@ -3,13 +3,17 @@ import type { NextRequest } from 'next/server'
 import { verifyAuthToken } from '@/lib/auth-cookie'
 
 /**
- * Middleware to protect routes that require authentication.
+ * Middleware — seamless auto-login.
+ *
+ * Instead of redirecting to a login page when no auth token is found,
+ * this middleware redirects to the demo login API which auto-authenticates
+ * the user (no credentials needed) and sends them back.
  *
  * Flow:
- * - Protected routes (/dashboard, /profile, /admin, /exam) require a valid eduAuthToken cookie.
- * - Unauthenticated users are redirected to /login with a callbackUrl parameter.
- * - Authenticated users visiting /login are redirected to /dashboard.
- * - Authenticated users visiting /admin must have the 'admin' role.
+ * - /admin/* → auto-login as admin
+ * - /login    → auto-login as student, redirects to /dashboard
+ * - /dashboard, /profile, /exam → auto-login as student
+ * - Authenticated users visiting /admin with non-admin role → redirected to /dashboard
  */
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
@@ -22,20 +26,43 @@ export async function middleware(request: NextRequest) {
   const protectedRoutes = ['/dashboard', '/profile', '/admin', '/exam']
   const isProtectedRoute = protectedRoutes.some(route => pathname.startsWith(route))
 
-  // If trying to access a protected route without auth, redirect to login
-  if (isProtectedRoute && !authUser) {
-    const loginUrl = new URL('/login', request.url)
-    loginUrl.searchParams.set('callbackUrl', pathname)
-    return NextResponse.redirect(loginUrl)
+  // ── No auth token? Auto-login via demo API ──
+  if (!authUser) {
+    // Visiting /login →
+    //   If it's a fallback from a failed auto-login (DB down), show the login page.
+    //   Otherwise, auto-login as student and redirect to dashboard.
+    if (pathname === '/login') {
+      if (request.nextUrl.searchParams.has('demo_fallback')) {
+        return NextResponse.next()
+      }
+      const demoUrl = new URL('/api/auth/demo', request.url)
+      demoUrl.searchParams.set('role', 'student')
+      demoUrl.searchParams.set('redirect', '/dashboard')
+      return NextResponse.redirect(demoUrl)
+    }
+
+    // Visiting a protected route → auto-login with matching role
+    if (isProtectedRoute) {
+      const demoUrl = new URL('/api/auth/demo', request.url)
+      const role = pathname.startsWith('/admin') ? 'admin' : 'student'
+      demoUrl.searchParams.set('role', role)
+      demoUrl.searchParams.set('redirect', pathname)
+      return NextResponse.redirect(demoUrl)
+    }
+
+    // Not a protected route, not login — just proceed
+    return NextResponse.next()
   }
 
+  // ── Authenticated user ──
+
   // Admin routes require admin role
-  if (pathname.startsWith('/admin') && authUser && authUser.role !== 'admin') {
+  if (pathname.startsWith('/admin') && authUser.role !== 'admin') {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 
-  // If already authenticated and trying to access login, redirect to dashboard
-  if (pathname === '/login' && authUser) {
+  // Already authenticated on /login → redirect to dashboard
+  if (pathname === '/login') {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 
