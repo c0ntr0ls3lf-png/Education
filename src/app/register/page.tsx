@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
@@ -12,6 +12,12 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/hooks/use-toast'
 
+interface ClassOption {
+  id: string
+  name: string
+  number: number
+}
+
 export default function RegisterPage() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -19,10 +25,30 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [selectedClass, setSelectedClass] = useState('')
+  const [classOptions, setClassOptions] = useState<ClassOption[]>([])
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [classesLoading, setClassesLoading] = useState(true)
   const router = useRouter()
   const { toast } = useToast()
+
+  // Fetch actual classes from the API
+  useEffect(() => {
+    async function fetchClasses() {
+      try {
+        const res = await fetch('/api/classes')
+        if (res.ok) {
+          const data = await res.json()
+          setClassOptions(Array.isArray(data) ? data : [])
+        }
+      } catch {
+        // Silently fail - will show empty state
+      } finally {
+        setClassesLoading(false)
+      }
+    }
+    fetchClasses()
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -54,10 +80,8 @@ export default function RegisterPage() {
       })
 
       if (res.ok) {
-        const user = await res.json()
-        localStorage.setItem('eduUser', JSON.stringify(user))
-        toast({ title: 'Account Created!', description: 'Welcome to EduLMS!' })
-        router.push('/dashboard')
+        toast({ title: 'Account Created!', description: 'Please sign in with your new account.' })
+        router.push('/login')
       } else {
         const data = await res.json()
         toast({ title: 'Registration Failed', description: data.error || 'Could not create account', variant: 'destructive' })
@@ -146,17 +170,23 @@ export default function RegisterPage() {
 
               {/* Class Selection */}
               <div className="space-y-2">
-                <Label htmlFor="class">Select Class</Label>
+                <Label htmlFor="class">Select Class (optional)</Label>
                 <Select value={selectedClass} onValueChange={setSelectedClass}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Choose your class" />
+                    <SelectValue placeholder={classesLoading ? "Loading classes..." : "Choose your class"} />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => (
-                      <SelectItem key={n} value={`class-${n}`}>
-                        Class {n}
+                    {classOptions.length === 0 && !classesLoading ? (
+                      <SelectItem value="none" disabled>
+                        No classes available
                       </SelectItem>
-                    ))}
+                    ) : (
+                      classOptions.map((cls) => (
+                        <SelectItem key={cls.id} value={cls.id}>
+                          {cls.name}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -218,7 +248,7 @@ export default function RegisterPage() {
               <Button
                 type="submit"
                 className="w-full bg-emerald-600 hover:bg-emerald-700 gap-2"
-                disabled={isLoading}
+                disabled={isLoading || classesLoading}
               >
                 {isLoading ? (
                   <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
