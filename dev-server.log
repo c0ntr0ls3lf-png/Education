@@ -1,0 +1,287 @@
+▲ Next.js 16.2.9 (Turbopack)
+- Local:         http://localhost:3002
+- Network:       http://192.168.137.1:3002
+- Environments: .env
+✓ Ready in 782ms
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+- Experiments (use with caution):
+  · optimizePackageImports
+
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+ GET / 200 in 1356ms (next.js: 404ms, application-code: 952ms)
+prisma:query SELECT `main`.`Quote`.`id`, `main`.`Quote`.`text`, `main`.`Quote`.`author`, `main`.`Quote`.`isActive`, `main`.`Quote`.`order`, `main`.`Quote`.`createdAt`, `main`.`Quote`.`updatedAt` FROM `main`.`Quote` WHERE `main`.`Quote`.`isActive` = ? ORDER BY `main`.`Quote`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/quotes 200 in 445ms (next.js: 193ms, application-code: 252ms)
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+ GET / 200 in 246ms (next.js: 5ms, application-code: 241ms)
+prisma:query SELECT `main`.`Quote`.`id`, `main`.`Quote`.`text`, `main`.`Quote`.`author`, `main`.`Quote`.`isActive`, `main`.`Quote`.`order`, `main`.`Quote`.`createdAt`, `main`.`Quote`.`updatedAt` FROM `main`.`Quote` WHERE `main`.`Quote`.`isActive` = ? ORDER BY `main`.`Quote`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/quotes 200 in 26ms (next.js: 4ms, application-code: 22ms)
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+ GET / 200 in 402ms (next.js: 15ms, application-code: 387ms)
+prisma:query SELECT 1
+prisma:query SELECT `main`.`Quote`.`id`, `main`.`Quote`.`text`, `main`.`Quote`.`author`, `main`.`Quote`.`isActive`, `main`.`Quote`.`order`, `main`.`Quote`.`createdAt`, `main`.`Quote`.`updatedAt` FROM `main`.`Quote` WHERE `main`.`Quote`.`isActive` = ? ORDER BY `main`.`Quote`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/quotes 200 in 19ms (next.js: 5ms, application-code: 14ms)
+ GET /admin 200 in 404ms (next.js: 50ms, proxy.ts: 124ms, application-code: 230ms)
+prisma:query SELECT `main`.`Quote`.`id`, `main`.`Quote`.`text`, `main`.`Quote`.`author`, `main`.`Quote`.`isActive`, `main`.`Quote`.`order`, `main`.`Quote`.`createdAt`, `main`.`Quote`.`updatedAt` FROM `main`.`Quote` WHERE `main`.`Quote`.`isActive` = ? ORDER BY `main`.`Quote`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/quotes 200 in 19ms (next.js: 7ms, application-code: 12ms)
+prisma:query SELECT COUNT(*) AS `_count$_all` FROM (SELECT `main`.`Chapter`.`id` FROM `main`.`Chapter` WHERE `main`.`Chapter`.`isActive` = ? LIMIT ? OFFSET ?) AS `sub`
+prisma:query SELECT COUNT(*) AS `_count$_all` FROM (SELECT `main`.`Class`.`id` FROM `main`.`Class` WHERE `main`.`Class`.`isActive` = ? LIMIT ? OFFSET ?) AS `sub`
+prisma:query SELECT COUNT(*) AS `_count$_all` FROM (SELECT `main`.`Subject`.`id` FROM `main`.`Subject` WHERE `main`.`Subject`.`isActive` = ? LIMIT ? OFFSET ?) AS `sub`
+prisma:query SELECT COUNT(*) AS `_count$_all` FROM (SELECT `main`.`User`.`id` FROM `main`.`User` WHERE 1=1 LIMIT ? OFFSET ?) AS `sub`
+prisma:query SELECT COUNT(*) AS `_count$_all` FROM (SELECT `main`.`Exam`.`id` FROM `main`.`Exam` WHERE `main`.`Exam`.`isActive` = ? LIMIT ? OFFSET ?) AS `sub`
+prisma:query SELECT COUNT(*) AS `_count$_all` FROM (SELECT `main`.`Testimonial`.`id` FROM `main`.`Testimonial` WHERE `main`.`Testimonial`.`isActive` = ? LIMIT ? OFFSET ?) AS `sub`
+prisma:query SELECT COUNT(*) AS `_count$_all` FROM (SELECT `main`.`ExamAttempt`.`id` FROM `main`.`ExamAttempt` WHERE 1=1 LIMIT ? OFFSET ?) AS `sub`
+prisma:query SELECT COUNT(*) AS `_count$_all` FROM (SELECT `main`.`Explanation`.`id` FROM `main`.`Explanation` WHERE `main`.`Explanation`.`isActive` = ? LIMIT ? OFFSET ?) AS `sub`
+prisma:query SELECT COUNT(*) AS `_count$_all` FROM (SELECT `main`.`FAQ`.`id` FROM `main`.`FAQ` WHERE `main`.`FAQ`.`isActive` = ? LIMIT ? OFFSET ?) AS `sub`
+prisma:query SELECT COUNT(*) AS `_count$_all` FROM (SELECT `main`.`McqQuestion`.`id` FROM `main`.`McqQuestion` WHERE `main`.`McqQuestion`.`isActive` = ? LIMIT ? OFFSET ?) AS `sub`
+prisma:query SELECT COUNT(*) AS `_count$_all` FROM (SELECT `main`.`CreativeQuestion`.`id` FROM `main`.`CreativeQuestion` WHERE `main`.`CreativeQuestion`.`isActive` = ? LIMIT ? OFFSET ?) AS `sub`
+ GET /api/stats 200 in 166ms (next.js: 113ms, application-code: 52ms)
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+ GET /class/class-9 200 in 1335ms (next.js: 1172ms, application-code: 163ms)
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+ GET /class/class-9/mathematics-class-9 200 in 1519ms (next.js: 778ms, application-code: 741ms)
+ GET /class/class-9/mathematics-class-9 200 in 401ms (next.js: 20ms, application-code: 381ms)
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+TypeError: fetch failed
+    at ignore-listed frames {
+  [cause]: AggregateError: 
+      at ignore-listed frames {
+    code: 'ECONNREFUSED',
+    [errors]: [ [Error], [Error] ]
+  }
+}
+ GET /class/class-9/mathematics-class-9/chapter-1 200 in 1248ms (next.js: 1075ms, application-code: 173ms)
+prisma:query SELECT `main`.`AdZone`.`id`, `main`.`AdZone`.`name`, `main`.`AdZone`.`slug`, `main`.`AdZone`.`location`, `main`.`AdZone`.`type`, `main`.`AdZone`.`code`, `main`.`AdZone`.`imageUrl`, `main`.`AdZone`.`linkUrl`, `main`.`AdZone`.`provider`, `main`.`AdZone`.`isActive`, `main`.`AdZone`.`impressions`, `main`.`AdZone`.`clicks`, `main`.`AdZone`.`createdAt`, `main`.`AdZone`.`updatedAt` FROM `main`.`AdZone` WHERE (`main`.`AdZone`.`isActive` = ? AND `main`.`AdZone`.`location` = ?) ORDER BY `main`.`AdZone`.`createdAt` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`AdZone`.`id`, `main`.`AdZone`.`name`, `main`.`AdZone`.`slug`, `main`.`AdZone`.`location`, `main`.`AdZone`.`type`, `main`.`AdZone`.`code`, `main`.`AdZone`.`imageUrl`, `main`.`AdZone`.`linkUrl`, `main`.`AdZone`.`provider`, `main`.`AdZone`.`isActive`, `main`.`AdZone`.`impressions`, `main`.`AdZone`.`clicks`, `main`.`AdZone`.`createdAt`, `main`.`AdZone`.`updatedAt` FROM `main`.`AdZone` WHERE (`main`.`AdZone`.`isActive` = ? AND `main`.`AdZone`.`location` = ?) ORDER BY `main`.`AdZone`.`createdAt` ASC LIMIT ? OFFSET ?
+ GET /api/ads?location=sidebar 200 in 96ms (next.js: 75ms, application-code: 22ms)
+ GET /api/ads?location=content 200 in 100ms (next.js: 87ms, application-code: 13ms)
+prisma:query SELECT `main`.`AdZone`.`id`, `main`.`AdZone`.`name`, `main`.`AdZone`.`slug`, `main`.`AdZone`.`location`, `main`.`AdZone`.`type`, `main`.`AdZone`.`code`, `main`.`AdZone`.`imageUrl`, `main`.`AdZone`.`linkUrl`, `main`.`AdZone`.`provider`, `main`.`AdZone`.`isActive`, `main`.`AdZone`.`impressions`, `main`.`AdZone`.`clicks`, `main`.`AdZone`.`createdAt`, `main`.`AdZone`.`updatedAt` FROM `main`.`AdZone` WHERE (`main`.`AdZone`.`isActive` = ? AND `main`.`AdZone`.`location` = ?) ORDER BY `main`.`AdZone`.`createdAt` ASC LIMIT ? OFFSET ?
+ GET /api/ads?location=sidebar 200 in 14ms (next.js: 7ms, application-code: 7ms)
+prisma:query SELECT 1
+prisma:query SELECT `main`.`User`.`id`, `main`.`User`.`email`, `main`.`User`.`name`, `main`.`User`.`role`, `main`.`User`.`image`, `main`.`User`.`bio`, `main`.`User`.`phone`, `main`.`User`.`classId`, `main`.`User`.`provider`, `main`.`User`.`emailVerified`, `main`.`User`.`createdAt`, `main`.`User`.`updatedAt` FROM `main`.`User` WHERE 1=1 ORDER BY `main`.`User`.`createdAt` DESC LIMIT ? OFFSET ?
+ GET /api/users 200 in 150ms (next.js: 134ms, application-code: 16ms)
