@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useSyncExternalStore } from 'react'
+import { useState, useEffect, useSyncExternalStore, useRef } from 'react'
 import Link from 'next/link'
 import { useTheme } from 'next-themes'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -19,6 +19,8 @@ import {
   ClipboardList,
   Home,
   ChevronDown,
+  Camera,
+  Loader2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -61,6 +63,68 @@ export function Header() {
   const [searchQuery, setSearchQuery] = useState('')
   const [scrolled, setScrolled] = useState(false)
   const [user, setUser] = useState<UserData | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !user) return
+    
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Image too large. Please upload an image under 10MB.')
+      return
+    }
+    
+    setUploading(true)
+    try {
+      const compressed = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const img = new Image()
+          img.onload = () => {
+            let w = img.width, h = img.height
+            if (w > 300 || h > 300) {
+              const ratio = Math.min(300 / w, 300 / h)
+              w = Math.round(w * ratio)
+              h = Math.round(h * ratio)
+            }
+            const canvas = document.createElement('canvas')
+            canvas.width = w
+            canvas.height = h
+            const ctx = canvas.getContext('2d')
+            if (!ctx) { reject(new Error('Canvas context not available')); return }
+            ctx.drawImage(img, 0, 0, w, h)
+            resolve(canvas.toDataURL('image/jpeg', 0.7))
+          }
+          img.onerror = reject
+          img.src = reader.result as string
+        }
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+      })
+
+      const userId = user.id || (user as any)._id
+      const res = await fetch(`/api/users/${userId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: compressed }),
+      })
+      
+      if (res.ok) {
+        const updatedUser = { ...user, image: compressed }
+        setUser(updatedUser)
+        localStorage.setItem('eduUser', JSON.stringify(updatedUser))
+        window.dispatchEvent(new Event('storage'))
+      } else {
+        alert('Failed to update profile picture.')
+      }
+    } catch (err) {
+      alert('Error uploading image.')
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
   const mounted = useSyncExternalStore(
     () => () => {},
     () => true,
@@ -210,11 +274,17 @@ export function Header() {
                         Dashboard
                       </Link>
                     </DropdownMenuItem>
-                    <DropdownMenuItem asChild>
-                      <Link href="/profile" className="flex items-center gap-2 cursor-pointer">
-                        <User className="h-4 w-4" />
-                        Profile
-                      </Link>
+                    <DropdownMenuItem 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex items-center gap-2 cursor-pointer"
+                      disabled={uploading}
+                    >
+                      {uploading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Camera className="h-4 w-4" />
+                      )}
+                      {uploading ? 'Uploading...' : 'Upload Pic'}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={handleLogout} className="flex items-center gap-2 cursor-pointer text-red-600 dark:text-red-400 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950/30">
@@ -231,6 +301,13 @@ export function Header() {
                   </Button>
                 </Link>
               )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleFileChange}
+              />
             </div>
 
             {/* Mobile Menu */}
@@ -311,12 +388,20 @@ export function Header() {
                           Dashboard
                         </Link>
                       </SheetClose>
-                      <SheetClose asChild>
-                        <Link href="/profile" className="flex items-center gap-3 px-4 py-3 text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 rounded-lg transition-colors">
-                          <User className="h-5 w-5" />
-                          Profile
-                        </Link>
-                      </SheetClose>
+                      <button
+                        onClick={() => {
+                          fileInputRef.current?.click()
+                        }}
+                        className="flex w-full items-center gap-3 px-4 py-3 text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 rounded-lg transition-colors text-left"
+                        disabled={uploading}
+                      >
+                        {uploading ? (
+                          <Loader2 className="h-5 w-5 animate-spin" />
+                        ) : (
+                          <Camera className="h-5 w-5" />
+                        )}
+                        {uploading ? 'Uploading...' : 'Upload Pic'}
+                      </button>
                       <div className="my-4 border-t" />
                       <Button
                         variant="outline"

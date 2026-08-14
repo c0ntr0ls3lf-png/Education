@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/select'
 import QuestionEditor from './QuestionEditor'
 import MetadataFields from './MetadataFields'
+import { htmlToPlainText } from '@/lib/html-utils'
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -19,7 +20,7 @@ export interface CqFormData {
   label: string
   question: string
   answer: string
-  marks: number
+  marks: number | ''
   difficulty: string
   // Metadata
   year: string
@@ -33,10 +34,14 @@ export interface CqFormData {
   segmentKh: string
   segmentG: string
   segmentGh: string
-  marksK: number
-  marksKh: number
-  marksG: number
-  marksGh: number
+  solutionK: string
+  solutionKh: string
+  solutionG: string
+  solutionGh: string
+  marksK: number | ''
+  marksKh: number | ''
+  marksG: number | ''
+  marksGh: number | ''
   // Explanation
   explanation: string
   tips: string
@@ -57,15 +62,16 @@ const EMPTY_CQ: CqFormData = {
   year: '', board: '', schoolName: '',
   board_name: '', exam_year: new Date().getFullYear().toString(), sourceType: 'custom',
   segmentK: '', segmentKh: '', segmentG: '', segmentGh: '',
+  solutionK: '', solutionKh: '', solutionG: '', solutionGh: '',
   marksK: 2, marksKh: 3, marksG: 4, marksGh: 4,
   explanation: '', tips: '', videoUrl: '',
 }
 
 const SEGMENTS = [
-  { key: 'segmentK' as const, marksKey: 'marksK' as const, label: 'ক (Ka)', color: 'emerald' },
-  { key: 'segmentKh' as const, marksKey: 'marksKh' as const, label: 'খ (Kha)', color: 'blue' },
-  { key: 'segmentG' as const, marksKey: 'marksG' as const, label: 'গ (Ga)', color: 'amber' },
-  { key: 'segmentGh' as const, marksKey: 'marksGh' as const, label: 'ঘ (Gha)', color: 'purple' },
+  { key: 'segmentK' as const, solutionKey: 'solutionK' as const, marksKey: 'marksK' as const, label: 'ক (Ka)', color: 'emerald' },
+  { key: 'segmentKh' as const, solutionKey: 'solutionKh' as const, marksKey: 'marksKh' as const, label: 'খ (Kha)', color: 'blue' },
+  { key: 'segmentG' as const, solutionKey: 'solutionG' as const, marksKey: 'marksG' as const, label: 'গ (Ga)', color: 'amber' },
+  { key: 'segmentGh' as const, solutionKey: 'solutionGh' as const, marksKey: 'marksGh' as const, label: 'ঘ (Gha)', color: 'purple' },
 ] as const
 
 const segmentColors: Record<string, string> = {
@@ -92,10 +98,20 @@ export default function CreativeEditor({
 
   const handleSave = () => {
     const finalForm = { ...form };
-    // Map metadata fields to legacy fields
+    finalForm.marks = form.marks === '' ? 10 : (parseInt(form.marks as any) || 10);
+    finalForm.marksK = form.marksK === '' ? 2 : (parseInt(form.marksK as any) || 2);
+    finalForm.marksKh = form.marksKh === '' ? 3 : (parseInt(form.marksKh as any) || 3);
+    finalForm.marksG = form.marksG === '' ? 4 : (parseInt(form.marksG as any) || 4);
+    finalForm.marksGh = form.marksGh === '' ? 4 : (parseInt(form.marksGh as any) || 4);
     finalForm.board = form.board_name;
     finalForm.year = form.exam_year;
-    onSave(finalForm);
+
+    if (!htmlToPlainText(finalForm.question)) {
+      alert('Stimulus / scenario text is required');
+      return;
+    }
+
+    onSave(finalForm as any);
   };
 
   return (
@@ -139,8 +155,11 @@ export default function CreativeEditor({
           <Input
             type="number"
             className="h-9 text-sm"
-            value={form.marks}
-            onChange={(e) => set('marks', parseInt(e.target.value) || 0)}
+            value={form.marks ?? ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              set('marks', val === '' ? '' : parseInt(val) || 0);
+            }}
           />
         </div>
       </div>
@@ -168,9 +187,9 @@ export default function CreativeEditor({
         {SEGMENTS.map((seg) => (
           <div
             key={seg.key}
-            className={`rounded-lg border-2 p-4 space-y-3 ${segmentColors[seg.color]}`}
+            className={`rounded-lg border-2 p-4 space-y-4 ${segmentColors[seg.color]}`}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between border-b pb-2">
               <Badge className={badgeColors[seg.color]}>
                 {seg.label}
               </Badge>
@@ -179,21 +198,36 @@ export default function CreativeEditor({
                 <Input
                   type="number"
                   className="h-7 w-16 text-xs text-center"
-                  value={form[seg.marksKey]}
-                  onChange={(e) =>
-                    set(seg.marksKey, parseInt(e.target.value) || 0)
-                  }
+                  value={form[seg.marksKey] ?? ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    set(seg.marksKey, val === '' ? '' : parseInt(val) || 0);
+                  }}
                 />
               </div>
             </div>
 
-            <QuestionEditor
-              value={form[seg.key]}
-              onChange={(v) => set(seg.key, v)}
-              label=""
-              placeholder={`Enter the ${seg.label} section question and answer...`}
-              minHeight={70}
-            />
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-muted-foreground">প্রশ্ন / Question</Label>
+              <QuestionEditor
+                value={form[seg.key]}
+                onChange={(v) => set(seg.key, v)}
+                label=""
+                placeholder={`Enter the ${seg.label} section question...`}
+                minHeight={60}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-muted-foreground">সমাধান / Solution</Label>
+              <QuestionEditor
+                value={form[seg.solutionKey]}
+                onChange={(v) => set(seg.solutionKey, v)}
+                label=""
+                placeholder={`Enter the ${seg.label} section solution...`}
+                minHeight={60}
+              />
+            </div>
           </div>
         ))}
       </div>
@@ -243,7 +277,7 @@ export default function CreativeEditor({
       {/* Action Buttons */}
       <div className="flex items-center gap-3 pt-2 border-t">
         <Button
-          onClick={() => onSave(form)}
+          onClick={handleSave}
           disabled={isSaving}
           className="bg-emerald-600 hover:bg-emerald-700 text-white"
         >

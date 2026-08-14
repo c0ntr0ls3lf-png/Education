@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
-import { GraduationCap, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react'
+import { GraduationCap, Mail, Lock, Eye, EyeOff, ArrowRight, ShieldCheck } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -16,7 +16,6 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [demoLoading, setDemoLoading] = useState<string | null>(null)
   const router = useRouter()
   const { toast } = useToast()
 
@@ -28,33 +27,6 @@ export default function LoginPage() {
     const cb = params.get('callbackUrl')
     if (cb) setCallbackUrl(cb)
   }, [])
-
-  const handleDemoLogin = async (role: 'admin' | 'student') => {
-    setDemoLoading(role)
-    try {
-      const res = await fetch('/api/auth/demo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role }),
-      })
-      const data = await res.json()
-      if (res.ok) {
-        localStorage.setItem('eduUser', JSON.stringify(data.user))
-        toast({ title: `Demo Login Successful`, description: `Logged in as ${role}` })
-        window.location.href = role === 'admin' ? '/admin' : callbackUrl
-      } else {
-        toast({
-          title: 'Demo Login Failed',
-          description: data.error || 'Could not log in. Make sure the database is seeded.',
-          variant: 'destructive',
-        })
-      }
-    } catch {
-      toast({ title: 'Error', description: 'Demo login failed. Is the database running?', variant: 'destructive' })
-    } finally {
-      setDemoLoading(null)
-    }
-  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -70,11 +42,13 @@ export default function LoginPage() {
       const data = await res.json()
 
       if (res.ok) {
+        // Store user info locally for client-side display
         localStorage.setItem('eduUser', JSON.stringify(data.user))
         toast({ title: 'Login Successful', description: data.message })
-        // Use window.location for a full page navigation so the middleware
-        // can read the newly-set auth cookie on the server side
-        window.location.href = callbackUrl
+
+        // Redirect admin to admin panel, others to callbackUrl or dashboard
+        const dest = data.user?.role === 'admin' ? '/admin' : callbackUrl
+        window.location.href = dest
       } else {
         toast({
           title: 'Login Failed',
@@ -129,18 +103,14 @@ export default function LoginPage() {
                     onChange={(e) => setEmail(e.target.value)}
                     className="pl-10"
                     required
+                    autoComplete="email"
                   />
                 </div>
               </div>
 
               {/* Password */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="password">Password</Label>
-                  <Link href="/login" className="text-xs text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">
-                    Forgot password?
-                  </Link>
-                </div>
+                <Label htmlFor="password">Password</Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
@@ -151,6 +121,7 @@ export default function LoginPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     className="pl-10 pr-10"
                     required
+                    autoComplete="current-password"
                   />
                   <button
                     type="button"
@@ -179,49 +150,13 @@ export default function LoginPage() {
               </Button>
             </form>
 
-            {/* ── Demo Login ── */}
-            <div className="relative my-6">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-card px-2 text-muted-foreground">Or try demo</span>
-              </div>
+            {/* Admin note */}
+            <div className="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 flex items-start gap-2">
+              <ShieldCheck className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                Admin? Use your admin email & password to access the Admin Panel.
+              </p>
             </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                className="gap-2 border-emerald-200 hover:bg-emerald-50 dark:border-emerald-800 dark:hover:bg-emerald-950/30"
-                disabled={demoLoading !== null}
-                onClick={() => handleDemoLogin('admin')}
-              >
-                {demoLoading === 'admin' ? (
-                  <div className="h-4 w-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <span className="text-emerald-600">👑</span>
-                )}
-                Demo Admin
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="gap-2 border-teal-200 hover:bg-teal-50 dark:border-teal-800 dark:hover:bg-teal-950/30"
-                disabled={demoLoading !== null}
-                onClick={() => handleDemoLogin('student')}
-              >
-                {demoLoading === 'student' ? (
-                  <div className="h-4 w-4 border-2 border-teal-600 border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <span className="text-teal-600">🎓</span>
-                )}
-                Demo Student
-              </Button>
-            </div>
-            <p className="text-center text-[10px] text-muted-foreground mt-2">
-              No password needed — one-click access for testing
-            </p>
 
             {/* Register Link */}
             <p className="text-center text-sm text-muted-foreground mt-6">

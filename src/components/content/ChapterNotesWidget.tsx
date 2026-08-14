@@ -46,50 +46,47 @@ export default function ChapterNotesWidget({ content }: ChapterNotesWidgetProps)
 
   return (
     <>
-      {/* ── Toggle Tab — fixed right edge ── */}
+      {/* ── Floating Pill Button — bottom-right ── */}
       <div
         style={{
           position: 'fixed',
-          top: '50%',
-          right: open ? '320px' : '0px',
-          transform: 'translateY(-50%)',
-          transition: 'right 0.35s cubic-bezier(0.4,0,0.2,1)',
+          bottom: '90px',
+          right: '16px',
           zIndex: 9999,
+          transition: 'transform 0.2s ease',
         }}
       >
         <button
           onClick={() => setOpen(v => !v)}
           aria-label="Toggle Chapter Notes"
+          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1.1)' }}
+          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1)' }}
           style={{
             cursor: 'pointer',
             border: 'none',
             outline: 'none',
-            borderRadius: '10px 0 0 10px',
-            backgroundColor: '#059669',
+            borderRadius: '50%',
+            width: '52px',
+            height: '52px',
+            background: open
+              ? 'linear-gradient(135deg, #047857, #065f46)'
+              : 'linear-gradient(135deg, #059669, #10b981)',
             color: '#fff',
             display: 'flex',
-            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '6px',
-            padding: '14px 7px',
-            boxShadow: '-3px 0 16px rgba(0,0,0,0.35)',
+            boxShadow: '0 6px 24px rgba(5,150,105,0.55), 0 2px 8px rgba(0,0,0,0.25)',
+            transition: 'all 0.2s ease',
+            flexShrink: 0,
           }}
         >
-          {/* Icon — always upright */}
-          <BookOpen style={{ width: 16, height: 16, flexShrink: 0 }} />
-          {/* Rotated text */}
-          <span style={{
-            writingMode: 'vertical-rl',
-            textOrientation: 'mixed',
-            transform: 'rotate(180deg)',
-            fontSize: '11px',
-            fontWeight: 700,
-            letterSpacing: '0.06em',
-            whiteSpace: 'nowrap',
-          }}>
-            Chapter Note
-          </span>
+          {open ? (
+            <X style={{ width: 20, height: 20 }} />
+          ) : (
+            <span style={{ fontSize: '11px', fontWeight: 900, letterSpacing: '0.03em', lineHeight: 1 }}>
+              Note
+            </span>
+          )}
         </button>
       </div>
 

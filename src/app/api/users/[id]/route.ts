@@ -24,6 +24,27 @@ export async function PUT(
     if (updateData.classId !== undefined) data.classId = updateData.classId;
     if (updateData.image !== undefined) data.image = updateData.image;
     if (updateData.isActive !== undefined) data.isActive = updateData.isActive;
+    if (updateData.selectedCategoryId !== undefined) data.selectedCategoryId = updateData.selectedCategoryId;
+    if (updateData.isProfileComplete !== undefined) data.isProfileComplete = updateData.isProfileComplete;
+
+    if (updateData.username !== undefined) {
+      const username = updateData.username?.trim();
+      if (username) {
+        // Check if username is already taken by another user
+        const existing = await User.findOne({ username, _id: { $ne: id } }).lean();
+        if (existing) {
+          return NextResponse.json({ error: 'Username is already taken' }, { status: 409 });
+        }
+        // Basic check for reserved routes
+        const reserved = ['about', 'contact', 'class', 'dashboard', 'profile', 'admin', 'exam', 'login', 'register', 'api', 't'];
+        if (reserved.includes(username.toLowerCase())) {
+          return NextResponse.json({ error: 'This username is reserved' }, { status: 400 });
+        }
+        data.username = username;
+      } else {
+        data.username = null;
+      }
+    }
 
     // If a new password is provided, hash it
     if (password && typeof password === 'string' && password.length > 0) {

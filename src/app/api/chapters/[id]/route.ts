@@ -126,8 +126,13 @@ export async function PUT(
       ...(updateData.sidebarContent !== undefined && { sidebarContent: updateData.sidebarContent }),
       ...(updateData.icon !== undefined && { icon: updateData.icon }),
       ...(updateData.color !== undefined && { color: updateData.color }),
+      ...(updateData.imageUrl !== undefined && { imageUrl: updateData.imageUrl }),
+      ...(updateData.imageVisible !== undefined && { imageVisible: updateData.imageVisible }),
       ...(updateData.order !== undefined && { order: updateData.order }),
       ...(updateData.isActive !== undefined && { isActive: updateData.isActive }),
+      ...(updateData.mainBookPdfUrl !== undefined && { mainBookPdfUrl: updateData.mainBookPdfUrl }),
+      ...(updateData.mcqPdfUrl !== undefined && { mcqPdfUrl: updateData.mcqPdfUrl }),
+      ...(updateData.cqPdfUrl !== undefined && { cqPdfUrl: updateData.cqPdfUrl }),
     }, { new: true }).lean();
 
     return NextResponse.json(toDoc(updatedChapter));

@@ -1,49 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB, McqQuestion, toDoc } from '@/lib/db';
+import { buildQuestionFilters, buildSortPipeline, normalizeQuestionMetadata } from '@/lib/query-helpers';
 
 export async function GET(request: NextRequest) {
   try {
     await connectDB();
     const { searchParams } = new URL(request.url);
-    const chapterId = searchParams.get('chapterId');
-    const difficulty = searchParams.get('difficulty');
-    const board = searchParams.get('board');
-    const year = searchParams.get('year');
+    
+    const where = buildQuestionFilters({
+      chapterId: searchParams.get('chapterId'),
+      difficulty: searchParams.get('difficulty'),
+      board: searchParams.get('board'),
+      year: searchParams.get('year'),
+    });
 
-    const where: Record<string, unknown> = {};
-    if (chapterId) where.chapterId = chapterId;
-    if (difficulty) where.difficulty = difficulty;
-    if (board && board !== 'all') {
-      where.board_name = { $regex: new RegExp('^' + board.replace(/-/g, ' ') + '$', 'i') };
-    }
-    if (year && year !== 'all') {
-      const parsedYear = parseInt(year, 10);
-      if (!isNaN(parsedYear)) {
-        where.exam_year = parsedYear;
-      }
-    }
-
-    const currentYear = new Date().getFullYear();
-    const pipeline: Record<string, unknown>[] = [
+    const pipeline = [
       { $match: where },
-      {
-        $addFields: {
-          sortPriority: {
-            $switch: {
-              branches: [
-                { case: { $and: [ { $eq: ['$sourceType', 'board'] }, { $eq: ['$exam_year', currentYear] } ] }, then: 1 },
-                { case: { $eq: ['$sourceType', 'board'] }, then: 2 },
-                { case: { $eq: ['$sourceType', 'school'] }, then: 3 },
-                { case: { $eq: ['$sourceType', 'model_test'] }, then: 4 },
-              ],
-              default: 5,
-            },
-          },
-        },
-      },
-      { $sort: { sortPriority: 1, exam_year: -1, order: 1, createdAt: 1 } },
-      { $project: { sortPriority: 0 } },
+      ...buildSortPipeline(),
+      { $sort: { createdAt: 1 } },
     ];
+    
     const mcqQuestions = await McqQuestion.aggregate(pipeline as any);
     return NextResponse.json(toDoc(mcqQuestions));
   } catch (error) {
@@ -64,10 +40,23 @@ export async function POST(request: NextRequest) {
       stem, subMcqs, statements, correctCombination, tips,
     } = body;
 
-    if (!chapterId || !question || !correctAnswer) {
-      return NextResponse.json({ error: 'chapterId, question, and correctAnswer are required' }, { status: 400 });
+    // Validation based on mcqType
+    if (!chapterId) {
+      return NextResponse.json({ error: 'chapterId is required' }, { status: 400 });
     }
 
+    const resolvedQuestion = question || (mcqType === 'stem_based' ? stem : null);
+    if (!resolvedQuestion) {
+      return NextResponse.json({ error: 'question is required' }, { status: 400 });
+    }
+    if (mcqType !== 'multiple_statement' && !correctAnswer) {
+      return NextResponse.json({ error: 'correctAnswer is required for single and stem-based questions' }, { status: 400 });
+    }
+    if (mcqType === 'multiple_statement' && !correctCombination) {
+      return NextResponse.json({ error: 'correctCombination is required for multiple statement questions' }, { status: 400 });
+    }
+
+    // Normalize options
     let finalOptionA = optionA || '';
     let finalOptionB = optionB || '';
     let finalOptionC = optionC || null;
@@ -92,23 +81,11 @@ export async function POST(request: NextRequest) {
       finalOptionD = options[3]?.text || null;
     }
 
-    const finalBoardName = board_name || boardName || board || null;
-    let finalExamYear: number | null = null;
-    const rawYear = (exam_year !== undefined && exam_year !== null && exam_year !== '') ? exam_year : ((questionYear !== undefined && questionYear !== null && questionYear !== '') ? questionYear : null);
-    if (rawYear !== null) {
-      const parsed = parseInt(String(rawYear), 10);
-      if (!isNaN(parsed)) {
-        finalExamYear = parsed;
-      }
-    }
-    
-    // Auto Current Year Support: If year is empty
-    if (!finalExamYear) {
-      finalExamYear = new Date().getFullYear();
-    }
+    // Normalize metadata
+    const metadata = normalizeQuestionMetadata({ board, boardName, board_name, year, questionYear, exam_year, sourceType });
 
-    const newMcq = await McqQuestion.create({
-      chapterId, question,
+    const createData = {
+      chapterId, question: resolvedQuestion,
       optionA: finalOptionA,
       optionB: finalOptionB,
       optionC: finalOptionC,
@@ -125,18 +102,25 @@ export async function POST(request: NextRequest) {
       year: year || null,
       board: board || null,
       schoolName: schoolName || null,
-      board_name: finalBoardName,
-      exam_year: finalExamYear,
-      sourceType: sourceType || 'custom',
+      ...metadata,
       stem: stem || null,
       subMcqs: subMcqs || null,
       statements: statements || null,
       correctCombination: correctCombination || null,
-    } as any);
+      tips: tips || null,
+    };
+    console.log('Creating MCQ with data:', JSON.stringify(createData, null, 2));
+
+    const newMcq = await (McqQuestion as any).create(createData, { strict: false });
 
     return NextResponse.json(toDoc(newMcq.toObject()), { status: 201 });
   } catch (error) {
     console.error('Error creating MCQ question:', error);
-    return NextResponse.json({ error: 'Failed to create MCQ question' }, { status: 500 });
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Error details:', errorMessage);
+    if (error instanceof Error && error.stack) {
+      console.error('Stack trace:', error.stack);
+    }
+    return NextResponse.json({ error: errorMessage || 'Failed to create MCQ question' }, { status: 500 });
   }
 }

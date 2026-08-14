@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
   try {
     await connectDB();
     const body = await request.json();
-    const { chapterId, question, solution, videoUrl, order, difficulty, tags, isActive } = body;
+    const { chapterId, question, solution, videoUrl, order, difficulty, tags, isActive, type, subQuestions } = body;
 
     if (!chapterId || !question) {
       return NextResponse.json({ error: 'chapterId and question are required' }, { status: 400 });
@@ -36,6 +36,8 @@ export async function POST(request: NextRequest) {
       difficulty: difficulty ?? 'medium',
       tags,
       isActive: isActive ?? true,
+      type: type || 'single',
+      subQuestions: subQuestions || null,
     });
 
     return NextResponse.json(toDoc(newExplanation.toObject()), { status: 201 });

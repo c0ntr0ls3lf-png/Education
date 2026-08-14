@@ -6,13 +6,16 @@ import {
   Lightbulb, CheckSquare, ClipboardList, Megaphone, Users, Settings,
   Bell, Search, Menu, X, Plus, Pencil, Trash2, ChevronDown,
   ArrowLeft, TrendingUp, Eye, Activity, ChevronRight, CheckCircle,
-  AlertCircle, RefreshCw, Quote
+  AlertCircle, RefreshCw, Quote, Library, FolderTree, LogOut
 } from 'lucide-react'
 import EditChapterModal from '@/components/admin/EditChapterModal'
+import BlogNoticeManager from '@/components/admin/BlogNoticeManager'
 import McqEditor from '@/components/admin/McqEditor'
 import type { McqFormData } from '@/components/admin/McqEditor'
 import CreativeEditor from '@/components/admin/CreativeEditor'
 import type { CqFormData } from '@/components/admin/CreativeEditor'
+import ExplanationEditor from '@/components/admin/ExplanationEditor'
+import type { ExplanationFormData } from '@/components/admin/ExplanationEditor'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -42,20 +45,29 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
 import Link from 'next/link'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import ExplanationTab from '@/components/content/ExplanationTab'
+import CreativeTab from '@/components/content/CreativeTab'
+import McqTab from '@/components/content/McqTab'
+import { parseCqSegmentsFromItem } from '@/lib/html-utils'
 
 // ─── Types ────────────────────────────────────────────────────
 interface ClassItem {
   id: string; name: string; slug: string; number: number;
   description?: string; icon?: string; color?: string; order: number; isActive: boolean;
+  categoryId?: string; subcategoryId?: string;
 }
 interface SubjectItem {
   id: string; name: string; slug: string; classId: string;
   description?: string; icon?: string; color?: string; order: number; isActive: boolean;
+  categoryId?: string; subcategoryId?: string;
   class?: { id: string; name: string }
 }
 interface ChapterItem {
   id: string; name: string; slug: string; subjectId: string;
   description?: string; icon?: string; color?: string; order: number; isActive: boolean;
+  imageUrl?: string | null; imageVisible?: boolean;
+  initialTab?: string;
   subject?: {
     id: string;
     name: string;
@@ -67,10 +79,12 @@ interface McqItem {
   id: string; chapterId: string; question: string; optionA: string; optionB: string;
   optionC: string | null; optionD: string | null; options?: string | null; correctAnswer: string; explanation?: string;
   marks: number; difficulty: string; tags?: string; order: number; isActive: boolean;
+  board_name?: string | null; exam_year?: number | null; sourceType?: string | null;
 }
 interface CreativeItem {
   id: string; chapterId: string; label: string; question: string; answer?: string;
   marks: number; difficulty: string; explanation?: string; tags?: string; order: number; isActive: boolean;
+  board_name?: string | null; exam_year?: number | null; sourceType?: string | null;
 }
 interface ExplanationItem {
   id: string; chapterId: string; question: string; solution?: string;
@@ -83,7 +97,7 @@ interface AdItem {
 }
 interface UserItem {
   id: string; name?: string; email: string; role: string; image?: string; phone?: string; classId?: string; createdAt: string;
-  password?: string;
+  password?: string; username?: string;
 }
 interface ExamItem {
   id: string; title: string; slug: string; type: string; totalQuestions: number;
@@ -94,6 +108,14 @@ interface QuoteItem {
   id: string; text: string; author?: string; order: number; isActive: boolean;
   createdAt: string;
 }
+interface CategoryItem {
+  id: string; name: string; slug: string; description: string; icon: string;
+  color: string; order: number; isActive: boolean; subcategories?: SubcategoryItem[];
+}
+interface SubcategoryItem {
+  id: string; categoryId: string; name: string; description: string;
+  order: number; isActive: boolean;
+}
 interface Stats {
   totalClasses: number; totalSubjects: number; totalChapters: number;
   totalExplanations: number; totalCreativeQuestions: number; totalMcqQuestions: number;
@@ -102,23 +124,50 @@ interface Stats {
   totalFaqs?: number;
 }
 
-type ViewType = 'dashboard' | 'classes' | 'subjects' | 'chapters' | 'explanations' |
-  'creative-questions' | 'mcq-questions' | 'exams' | 'ads' | 'users' | 'settings' | 'quotes'
+type ViewType = 'dashboard' | 'main-categories' | 'subcategories' | 'classes' | 'subjects' | 'chapters' | 'explanations' |
+  'creative-questions' | 'mcq-questions' | 'exams' | 'ads' | 'users' | 'settings' | 'quotes' | 'pending-approvals' | 'recent-activity' | 'categories' | 'blog-notices'
+
+const CATEGORY_ICON_OPTIONS = [
+  { value: 'GraduationCap', label: 'Graduation Cap' },
+  { value: 'University', label: 'University' },
+  { value: 'Briefcase', label: 'Briefcase' },
+  { value: 'Library', label: 'Library' },
+  { value: 'BookOpen', label: 'Book Open' },
+  { value: 'Users', label: 'Users' },
+  { value: 'Award', label: 'Award' },
+  { value: 'Sparkles', label: 'Sparkles' },
+]
+
+const CATEGORY_COLOR_OPTIONS = [
+  { value: 'from-emerald-500 to-teal-600', label: 'Emerald/Teal' },
+  { value: 'from-blue-500 to-indigo-600', label: 'Blue/Indigo' },
+  { value: 'from-orange-500 to-red-600', label: 'Orange/Red' },
+  { value: 'from-purple-500 to-pink-600', label: 'Purple/Pink' },
+  { value: 'from-rose-500 to-orange-600', label: 'Rose/Orange' },
+  { value: 'from-cyan-500 to-blue-600', label: 'Cyan/Blue' },
+]
 
 // ─── Navigation Items ─────────────────────────────────────────
 const navItems: { key: ViewType; label: string; icon: React.ReactNode }[] = [
   { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="h-4 w-4" /> },
+  { key: 'main-categories', label: 'Main Category', icon: <Library className="h-4 w-4" /> },
+  { key: 'subcategories', label: 'Sub Category', icon: <FolderTree className="h-4 w-4" /> },
   { key: 'classes', label: 'Classes', icon: <GraduationCap className="h-4 w-4" /> },
   { key: 'subjects', label: 'Subjects', icon: <BookOpen className="h-4 w-4" /> },
   { key: 'chapters', label: 'Chapters', icon: <Layers className="h-4 w-4" /> },
+  { key: 'blog-notices', label: 'Blog & Notices', icon: <FileText className="h-4 w-4" /> },
   { key: 'quotes', label: 'Quotes', icon: <Quote className="h-4 w-4" /> },
   { key: 'ads', label: 'Ads', icon: <Megaphone className="h-4 w-4" /> },
   { key: 'users', label: 'Users', icon: <Users className="h-4 w-4" /> },
+  { key: 'pending-approvals', label: 'Pending Approvals', icon: <ClipboardList className="h-4 w-4" /> },
+  { key: 'recent-activity', label: 'Recent Activity', icon: <Activity className="h-4 w-4" /> },
   { key: 'settings', label: 'Settings', icon: <Settings className="h-4 w-4" /> },
 ]
 
 const viewLabels: Record<ViewType, string> = {
   dashboard: 'Dashboard',
+  'main-categories': 'Main Category Management',
+  subcategories: 'Sub Category Management',
   classes: 'Class Management',
   subjects: 'Subject Management',
   chapters: 'Chapter Management',
@@ -129,7 +178,11 @@ const viewLabels: Record<ViewType, string> = {
   ads: 'Ad Management',
   quotes: 'Quote Management',
   users: 'User Management',
+  'pending-approvals': 'Pending Approvals',
+  'recent-activity': 'Recent Activity',
   settings: 'Site Settings',
+  categories: 'Category Management',
+  'blog-notices': 'Blog & Notice Board',
 }
 
 // ─── Helper ───────────────────────────────────────────────────
@@ -161,9 +214,20 @@ export default function AdminPage() {
   const [exams, setExams] = useState<ExamItem[]>([])
   const [quotes, setQuotes] = useState<QuoteItem[]>([])
   const [settings, setSettings] = useState<Record<string, string>>({})
+  const [categories, setCategories] = useState<CategoryItem[]>([])
+  const [subcategories, setSubcategories] = useState<SubcategoryItem[]>([])
+
+  // Chapter image panel states (must be at top level — Rules of Hooks)
+  const [localChapters, setLocalChapters] = useState<ChapterItem[]>([])
+
+  // Chapter content preview states
+  const [previewData, setPreviewData] = useState<Record<string, any>>({})
+  const [previewLoadingId, setPreviewLoadingId] = useState<string | null>(null)
+  const [expandedPreviewId, setExpandedPreviewId] = useState<string | null>(null)
 
   // Filter states
   const [filterClassId, setFilterClassId] = useState('all')
+  const [filterCategoryId, setFilterCategoryId] = useState('all')
   const [filterSubjectId, setFilterSubjectId] = useState('all')
   const [filterChapterId, setFilterChapterId] = useState('all')
 
@@ -192,6 +256,20 @@ export default function AdminPage() {
   const [cqEditing, setCqEditing] = useState<CreativeItem | null>(null)
   const [cqSaving, setCqSaving] = useState(false)
 
+  // Explanation editor states
+  const [explanationEditorOpen, setExplanationEditorOpen] = useState(false)
+  const [explanationEditing, setExplanationEditing] = useState<ExplanationItem | null>(null)
+  const [explanationSaving, setExplanationSaving] = useState(false)
+
+  // Pending approvals & activity log states
+  interface PendingChange { _id: string; teacherId: { _id: string; name?: string; email: string }; contentType: string; contentId: string; payload: Record<string, any>; status: 'pending' | 'approved' | 'rejected'; createdAt: string; notes?: string }
+  interface ActivityLogEntry { _id: string; userId: { _id: string; name?: string; email: string }; action: string; description: string; createdAt: string }
+  const [pendingChanges, setPendingChanges] = useState<PendingChange[]>([])
+  const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([])
+  const [pendingCount, setPendingCount] = useState(0)
+  const [pendingLoading, setPendingLoading] = useState(false)
+  const [activityLoading, setActivityLoading] = useState(false)
+
   // Fetch stats
   const fetchStats = useCallback(async () => {
     try {
@@ -204,8 +282,12 @@ export default function AdminPage() {
   const fetchClasses = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/classes?include=subjects')
-      if (res.ok) setClasses(await res.json())
+      const [clsRes, catRes] = await Promise.all([
+        fetch('/api/classes?include=subjects'),
+        fetch('/api/categories?includeSubcategories=true&all=true'),
+      ])
+      if (clsRes.ok) setClasses(await clsRes.json())
+      if (catRes.ok) setCategories(await catRes.json())
     } catch { /* ignore */ }
     setLoading(false)
   }, [])
@@ -217,14 +299,14 @@ export default function AdminPage() {
       const url = filterClassId && filterClassId !== 'all'
         ? `/api/subjects?classId=${filterClassId}&include=chapters`
         : '/api/subjects?include=chapters'
-      const res = await fetch(url)
-      if (res.ok) {
-        const data = await res.json()
-        setSubjects(data)
-        // Also fetch all classes for the dropdown
-        const cRes = await fetch('/api/classes')
-        if (cRes.ok) setClasses(await cRes.json())
-      }
+      const [subRes, clsRes, catRes] = await Promise.all([
+        fetch(url),
+        fetch('/api/classes'),
+        fetch('/api/categories?includeSubcategories=true&all=true'),
+      ])
+      if (subRes.ok) setSubjects(await subRes.json())
+      if (clsRes.ok) setClasses(await clsRes.json())
+      if (catRes.ok) setCategories(await catRes.json())
     } catch { /* ignore */ }
     setLoading(false)
   }, [filterClassId])
@@ -233,25 +315,78 @@ export default function AdminPage() {
   const fetchChapters = useCallback(async () => {
     setLoading(true)
     try {
-      const url = filterSubjectId && filterSubjectId !== 'all'
+      const chUrl = filterSubjectId && filterSubjectId !== 'all'
         ? `/api/chapters?subjectId=${filterSubjectId}`
         : '/api/chapters'
-      const res = await fetch(url)
-      if (res.ok) {
-        const data = await res.json()
+      const sUrl = filterClassId && filterClassId !== 'all'
+        ? `/api/subjects?classId=${filterClassId}`
+        : '/api/subjects'
+      const [chRes, sRes, clsRes, catRes] = await Promise.all([
+        fetch(chUrl),
+        fetch(sUrl),
+        fetch('/api/classes'),
+        fetch('/api/categories?includeSubcategories=true&all=true'),
+      ])
+      if (chRes.ok) {
+        const data = await chRes.json()
         setChapters(data)
-        // Fetch subjects filtered by class if a class is selected
-        const sUrl = filterClassId && filterClassId !== 'all'
-          ? `/api/subjects?classId=${filterClassId}`
-          : '/api/subjects'
-        const sRes = await fetch(sUrl)
-        if (sRes.ok) setSubjects(await sRes.json())
-        const cRes = await fetch('/api/classes')
-        if (cRes.ok) setClasses(await cRes.json())
+        setLocalChapters(data)
       }
+      if (sRes.ok) setSubjects(await sRes.json())
+      if (clsRes.ok) setClasses(await clsRes.json())
+      if (catRes.ok) setCategories(await catRes.json())
     } catch { /* ignore */ }
     setLoading(false)
   }, [filterSubjectId, filterClassId])
+
+  const togglePreview = async (chapterId: string) => {
+    if (expandedPreviewId === chapterId) {
+      setExpandedPreviewId(null)
+      return
+    }
+
+    setExpandedPreviewId(chapterId)
+
+    if (!previewData[chapterId]) {
+      setPreviewLoadingId(chapterId)
+      try {
+        const res = await fetch(`/api/chapters/${chapterId}?include=content`)
+        if (res.ok) {
+          const data = await res.json()
+          setPreviewData(prev => ({ ...prev, [chapterId]: data }))
+        }
+      } catch (err) {
+        toast({ title: 'Error', description: 'Failed to load chapter content preview.', variant: 'destructive' })
+      } finally {
+        setPreviewLoadingId(null)
+      }
+    }
+  }
+
+  const refreshPreviewForChapter = useCallback((chapterId: string) => {
+    if (!chapterId || chapterId === 'all') return
+    setPreviewData(prev => {
+      const copy = { ...prev }
+      delete copy[chapterId]
+      return copy
+    })
+    if (expandedPreviewId === chapterId) {
+      fetch(`/api/chapters/${chapterId}?include=content`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          if (data) {
+            setPreviewData(prev => ({ ...prev, [chapterId]: data }))
+          }
+        })
+    }
+  }, [expandedPreviewId])
+
+  const handleChapterSaved = () => {
+    if (chapterEditing?.id) {
+      refreshPreviewForChapter(chapterEditing.id)
+    }
+    fetchChapters()
+  }
 
   // Fetch MCQ questions
   const fetchMcqQuestions = useCallback(async () => {
@@ -347,6 +482,55 @@ export default function AdminPage() {
     } catch { /* ignore */ }
   }, [])
 
+  // Fetch categories
+  const fetchCategories = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/categories?includeSubcategories=true&all=true')
+      if (res.ok) setCategories(await res.json())
+    } catch { /* ignore */ }
+    setLoading(false)
+  }, [])
+
+  // Fetch subcategories
+  const fetchSubcategories = useCallback(async () => {
+    setLoading(true)
+    try {
+      const catRes = await fetch('/api/categories?all=true')
+      if (catRes.ok) setCategories(await catRes.json())
+      const url = filterCategoryId && filterCategoryId !== 'all'
+        ? `/api/subcategories?categoryId=${filterCategoryId}`
+        : '/api/subcategories'
+      const res = await fetch(url)
+      if (res.ok) setSubcategories(await res.json())
+    } catch { /* ignore */ }
+    setLoading(false)
+  }, [filterCategoryId])
+
+  // Fetch pending changes
+  const fetchPendingChanges = useCallback(async () => {
+    setPendingLoading(true)
+    try {
+      const res = await fetch('/api/pending')
+      if (res.ok) {
+        const data = await res.json()
+        setPendingChanges(data)
+        setPendingCount(data.filter((p: any) => p.status === 'pending').length)
+      }
+    } catch { /* ignore */ }
+    setPendingLoading(false)
+  }, [])
+
+  // Fetch activity log
+  const fetchActivityLog = useCallback(async () => {
+    setActivityLoading(true)
+    try {
+      const res = await fetch('/api/activity')
+      if (res.ok) setActivityLog(await res.json())
+    } catch { /* ignore */ }
+    setActivityLoading(false)
+  }, [])
+
   // Load data when view changes
   useEffect(() => {
     let cancelled = false
@@ -354,6 +538,8 @@ export default function AdminPage() {
       if (cancelled) return
       switch (activeView) {
         case 'dashboard': await fetchStats(); break
+        case 'main-categories': await fetchCategories(); break
+        case 'subcategories': await fetchSubcategories(); break
         case 'classes': await fetchClasses(); break
         case 'subjects': await fetchSubjects(); break
         case 'chapters': await fetchChapters(); break
@@ -365,17 +551,41 @@ export default function AdminPage() {
         case 'exams': await fetchExams(); break
         case 'quotes': await fetchQuotes(); break
         case 'settings': await fetchSettings(); break
+        case 'pending-approvals': await fetchPendingChanges(); break
+        case 'recent-activity': await fetchActivityLog(); break
       }
     }
     loadData()
     return () => { cancelled = true }
-  }, [activeView, fetchStats, fetchClasses, fetchSubjects, fetchChapters,
+  }, [activeView, fetchStats, fetchCategories, fetchSubcategories, fetchClasses, fetchSubjects, fetchChapters,
     fetchMcqQuestions, fetchCreativeQuestions, fetchExplanations, fetchAds,
-    fetchUsers, fetchExams, fetchQuotes, fetchSettings])
+    fetchUsers, fetchExams, fetchQuotes, fetchSettings, fetchPendingChanges, fetchActivityLog])
+
+  // Verify admin session on mount
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data?.user || data.user.role !== 'admin') {
+          window.location.href = '/login'
+        }
+      })
+      .catch(() => { window.location.href = '/login' })
+  }, [])
+
+  // Always load pending count on mount so the Bell badge is correct
+  useEffect(() => {
+    fetch('/api/pending')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: any[]) => setPendingCount(data.filter(p => p.status === 'pending').length))
+      .catch(() => {})
+  }, [])
 
   // ─── CRUD handlers ────────────────────────────────────────────
   const getApiBase = (): string => {
     switch (activeView) {
+      case 'main-categories': return '/api/categories'
+      case 'subcategories': return '/api/subcategories'
       case 'classes': return '/api/classes'
       case 'subjects': return '/api/subjects'
       case 'chapters': return '/api/chapters'
@@ -390,9 +600,115 @@ export default function AdminPage() {
     }
   }
 
+  const buildSavePayload = () => {
+    const sanitizedData = { ...formData }
+    const numericFields = ['number', 'order', 'marks', 'totalQuestions', 'marksPerQuestion', 'duration']
+    for (const field of numericFields) {
+      if (sanitizedData[field] === '') {
+        if (field === 'marks') {
+          sanitizedData[field] = activeView === 'mcq-questions' ? 1 : 10
+        } else if (field === 'totalQuestions') {
+          sanitizedData[field] = 10
+        } else if (field === 'marksPerQuestion') {
+          sanitizedData[field] = 1
+        } else if (field === 'duration') {
+          sanitizedData[field] = 30
+        } else {
+          sanitizedData[field] = 0
+        }
+      }
+    }
+
+    if (activeView === 'main-categories') {
+      return {
+        name: sanitizedData.name?.trim(),
+        slug: sanitizedData.slug?.trim()?.toLowerCase(),
+        description: sanitizedData.description?.trim() || '',
+        icon: sanitizedData.icon || 'GraduationCap',
+        color: sanitizedData.color || 'from-emerald-500 to-teal-600',
+        order: sanitizedData.order ?? 0,
+        isActive: sanitizedData.isActive !== false,
+      }
+    }
+
+    if (activeView === 'subcategories') {
+      return {
+        categoryId: sanitizedData.categoryId,
+        name: sanitizedData.name?.trim(),
+        description: sanitizedData.description?.trim() || '',
+        order: sanitizedData.order ?? 0,
+        isActive: sanitizedData.isActive !== false,
+      }
+    }
+
+    if (activeView === 'classes') {
+      return {
+        categoryId: sanitizedData.categoryId || null,
+        subcategoryId: sanitizedData.subcategoryId || null,
+        name: sanitizedData.name?.trim(),
+        slug: sanitizedData.slug?.trim(),
+        number: sanitizedData.number,
+        description: sanitizedData.description?.trim() || '',
+        icon: sanitizedData.icon,
+        color: sanitizedData.color,
+        order: sanitizedData.order ?? 0,
+        isActive: sanitizedData.isActive !== false,
+      }
+    }
+
+    if (activeView === 'subjects') {
+      return {
+        categoryId: sanitizedData.categoryId || null,
+        subcategoryId: sanitizedData.subcategoryId || null,
+        classId: sanitizedData.classId,
+        name: sanitizedData.name?.trim(),
+        slug: sanitizedData.slug?.trim(),
+        description: sanitizedData.description?.trim() || '',
+        icon: sanitizedData.icon,
+        color: sanitizedData.color,
+        order: sanitizedData.order ?? 0,
+        isActive: sanitizedData.isActive !== false,
+      }
+    }
+
+    if (activeView === 'chapters') {
+      return {
+        categoryId: sanitizedData.categoryId || null,
+        subcategoryId: sanitizedData.subcategoryId || null,
+        classId: sanitizedData.classId || null,
+        subjectId: sanitizedData.subjectId,
+        name: sanitizedData.name?.trim(),
+        slug: sanitizedData.slug?.trim(),
+        description: sanitizedData.description?.trim() || '',
+        icon: sanitizedData.icon,
+        color: sanitizedData.color,
+        order: sanitizedData.order ?? 0,
+        isActive: sanitizedData.isActive !== false,
+      }
+    }
+
+    return sanitizedData
+  }
+
   const handleSave = async () => {
     const base = getApiBase()
     if (!base) return
+
+    const sanitizedData = buildSavePayload()
+
+    if (activeView === 'main-categories') {
+      if (!sanitizedData.name || !sanitizedData.slug) {
+        toast({ title: 'Missing fields', description: 'Name and slug are required.', variant: 'destructive' })
+        return
+      }
+    }
+
+    if (activeView === 'subcategories') {
+      if (!sanitizedData.categoryId || !sanitizedData.name) {
+        toast({ title: 'Missing fields', description: 'Main category and name are required.', variant: 'destructive' })
+        return
+      }
+    }
 
     try {
       let res
@@ -400,13 +716,13 @@ export default function AdminPage() {
         res = await fetch(`${base}/${editingItem.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formData),
+          body: JSON.stringify(sanitizedData),
         })
       } else {
         res = await fetch(base, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formData),
+          body: JSON.stringify(sanitizedData),
         })
       }
 
@@ -414,8 +730,15 @@ export default function AdminPage() {
         setDialogOpen(false)
         setEditingItem(null)
         setFormData({})
+        toast({
+          title: editingItem?.id ? 'Updated' : 'Created',
+          description: `${viewLabels[activeView]?.replace(' Management', '')} saved successfully.`,
+        })
         // Refresh data
         switch (activeView) {
+          case 'main-categories': fetchCategories(); break
+          case 'subcategories': fetchCategories(); break
+          case 'categories': fetchCategories(); break
           case 'classes': fetchClasses(); break
           case 'subjects': fetchSubjects(); break
           case 'chapters': fetchChapters(); break
@@ -427,8 +750,21 @@ export default function AdminPage() {
           case 'quotes': fetchQuotes(); break
           case 'users': fetchUsers(); break
         }
+      } else {
+        const err = await res.json().catch(() => ({}))
+        toast({
+          title: 'Save failed',
+          description: err.error || 'Could not save. Please check your input and try again.',
+          variant: 'destructive',
+        })
       }
-    } catch { /* ignore */ }
+    } catch {
+      toast({
+        title: 'Save failed',
+        description: 'Network error while saving. Please try again.',
+        variant: 'destructive',
+      })
+    }
   }
 
   // ─── MCQ Editor Save ────────────────────────────────────────────────
@@ -437,11 +773,12 @@ export default function AdminPage() {
     try {
       const chapterId = mcqEditing?.chapterId || filterChapterId
       if (!chapterId || chapterId === 'all') {
-        alert('Please select a chapter first')
+        toast({ title: 'Select a chapter', description: 'Please choose a chapter before saving.', variant: 'destructive' })
         setMcqSaving(false)
         return
       }
       const payload = { ...data, chapterId }
+      alert(`Saving MCQ:\n\nQuestion: ${payload.question}\nChapter ID: ${payload.chapterId}\n\nFull payload: ${JSON.stringify(payload, null, 2)}`)
       const url = mcqEditing?.id
         ? `/api/mcq-questions/${mcqEditing.id}`
         : '/api/mcq-questions'
@@ -454,19 +791,36 @@ export default function AdminPage() {
       if (res.ok) {
         setMcqEditorOpen(false)
         setMcqEditing(null)
+        refreshPreviewForChapter(chapterId)
         fetchMcqQuestions()
+        toast({ title: 'Success', description: 'MCQ question saved successfully' })
+      } else {
+        const err = await res.json().catch(() => ({}))
+        toast({
+          title: 'Save failed',
+          description: err.error || 'Could not save MCQ question.',
+          variant: 'destructive',
+        })
       }
-    } catch { /* ignore */ }
+    } catch {
+      toast({
+        title: 'Save failed',
+        description: 'Network error while saving MCQ question.',
+        variant: 'destructive',
+      })
+    }
     setMcqSaving(false)
   }
 
   const handleMcqDelete = async () => {
     if (!mcqEditing?.id) return
+    const chapterId = mcqEditing.chapterId || filterChapterId
     try {
       const res = await fetch(`/api/mcq-questions/${mcqEditing.id}`, { method: 'DELETE' })
       if (res.ok) {
         setMcqEditorOpen(false)
         setMcqEditing(null)
+        refreshPreviewForChapter(chapterId)
         fetchMcqQuestions()
       }
     } catch { /* ignore */ }
@@ -478,7 +832,7 @@ export default function AdminPage() {
     try {
       const chapterId = cqEditing?.chapterId || filterChapterId
       if (!chapterId || chapterId === 'all') {
-        alert('Please select a chapter first')
+        toast({ title: 'Select a chapter', description: 'Please choose a chapter before saving.', variant: 'destructive' })
         setCqSaving(false)
         return
       }
@@ -495,20 +849,95 @@ export default function AdminPage() {
       if (res.ok) {
         setCqEditorOpen(false)
         setCqEditing(null)
+        refreshPreviewForChapter(chapterId)
         fetchCreativeQuestions()
+        toast({ title: 'Success', description: 'Creative question saved successfully' })
+      } else {
+        const err = await res.json().catch(() => ({}))
+        toast({
+          title: 'Save failed',
+          description: err.error || 'Could not save creative question.',
+          variant: 'destructive',
+        })
       }
-    } catch { /* ignore */ }
+    } catch {
+      toast({
+        title: 'Save failed',
+        description: 'Network error while saving creative question.',
+        variant: 'destructive',
+      })
+    }
     setCqSaving(false)
   }
 
   const handleCqDelete = async () => {
     if (!cqEditing?.id) return
+    const chapterId = cqEditing.chapterId || filterChapterId
     try {
       const res = await fetch(`/api/creative-questions/${cqEditing.id}`, { method: 'DELETE' })
       if (res.ok) {
         setCqEditorOpen(false)
         setCqEditing(null)
+        refreshPreviewForChapter(chapterId)
         fetchCreativeQuestions()
+      }
+    } catch { /* ignore */ }
+  }
+
+  // ─── Explanation Editor Save ─────────────────────────────────────────
+  const handleExplanationSave = async (data: ExplanationFormData) => {
+    setExplanationSaving(true)
+    try {
+      const chapterId = explanationEditing?.chapterId || filterChapterId
+      if (!chapterId || chapterId === 'all') {
+        toast({ title: 'Select a chapter', description: 'Please choose a chapter before saving.', variant: 'destructive' })
+        setExplanationSaving(false)
+        return
+      }
+      const payload = { ...data, chapterId }
+      const url = explanationEditing?.id
+        ? `/api/explanations/${explanationEditing.id}`
+        : '/api/explanations'
+      const method = explanationEditing?.id ? 'PUT' : 'POST'
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (res.ok) {
+        setExplanationEditorOpen(false)
+        setExplanationEditing(null)
+        refreshPreviewForChapter(chapterId)
+        fetchExplanations()
+        toast({ title: 'Success', description: 'Main Book Q&A saved successfully' })
+      } else {
+        const err = await res.json().catch(() => ({}))
+        toast({
+          title: 'Save failed',
+          description: err.error || 'Could not save Main Book Q&A.',
+          variant: 'destructive',
+        })
+      }
+    } catch {
+      toast({
+        title: 'Save failed',
+        description: 'Network error while saving Main Book Q&A.',
+        variant: 'destructive',
+      })
+    }
+    setExplanationSaving(false)
+  }
+
+  const handleExplanationDelete = async () => {
+    if (!explanationEditing?.id) return
+    const chapterId = explanationEditing.chapterId || filterChapterId
+    try {
+      const res = await fetch(`/api/explanations/${explanationEditing.id}`, { method: 'DELETE' })
+      if (res.ok) {
+        setExplanationEditorOpen(false)
+        setExplanationEditing(null)
+        refreshPreviewForChapter(chapterId)
+        fetchExplanations()
       }
     } catch { /* ignore */ }
   }
@@ -522,7 +951,10 @@ export default function AdminPage() {
       if (res.ok) {
         setDeleteDialogOpen(false)
         setDeletingItem(null)
+        toast({ title: 'Deleted', description: 'Item deleted successfully.' })
         switch (activeView) {
+          case 'main-categories': fetchCategories(); break
+          case 'subcategories': fetchSubcategories(); break
           case 'classes': fetchClasses(); break
           case 'subjects': fetchSubjects(); break
           case 'chapters': fetchChapters(); break
@@ -534,8 +966,21 @@ export default function AdminPage() {
           case 'quotes': fetchQuotes(); break
           case 'users': fetchUsers(); break
         }
+      } else {
+        const err = await res.json().catch(() => ({}))
+        toast({
+          title: 'Delete failed',
+          description: err.error || 'Could not delete item.',
+          variant: 'destructive',
+        })
       }
-    } catch { /* ignore */ }
+    } catch {
+      toast({
+        title: 'Delete failed',
+        description: 'Network error while deleting.',
+        variant: 'destructive',
+      })
+    }
   }
 
   const handleSettingsSave = async () => {
@@ -555,6 +1000,19 @@ export default function AdminPage() {
     }
   }
 
+  const requireChapterForContent = (): string | null => {
+    const chapterId = filterChapterId
+    if (!chapterId || chapterId === 'all') {
+      toast({
+        title: 'Select a chapter',
+        description: 'Please choose a chapter from the filter dropdown before adding content.',
+        variant: 'destructive',
+      })
+      return null
+    }
+    return chapterId
+  }
+
   const openAddDialog = () => {
     // Use premium chapter modal for chapters view
     if (activeView === 'chapters') {
@@ -564,13 +1022,38 @@ export default function AdminPage() {
     }
     // Use dedicated editors for MCQ/CQ
     if (activeView === 'mcq-questions') {
+      if (!requireChapterForContent()) return
       setMcqEditing(null)
       setMcqEditorOpen(true)
       return
     }
     if (activeView === 'creative-questions') {
+      if (!requireChapterForContent()) return
       setCqEditing(null)
       setCqEditorOpen(true)
+      return
+    }
+    if (activeView === 'explanations') {
+      if (!requireChapterForContent()) return
+      setExplanationEditing(null)
+      setExplanationEditorOpen(true)
+      return
+    }
+    if (activeView === 'subcategories' && filterCategoryId !== 'all') {
+      setEditingItem(null)
+      setFormData({ categoryId: filterCategoryId, order: 0, isActive: true })
+      setDialogOpen(true)
+      return
+    }
+    if (activeView === 'main-categories') {
+      setEditingItem(null)
+      setFormData({
+        icon: 'GraduationCap',
+        color: 'from-emerald-500 to-teal-600',
+        order: 0,
+        isActive: true,
+      })
+      setDialogOpen(true)
       return
     }
     setEditingItem(null)
@@ -596,8 +1079,17 @@ export default function AdminPage() {
       setCqEditorOpen(true)
       return
     }
+    if (activeView === 'explanations') {
+      setExplanationEditing(item)
+      setExplanationEditorOpen(true)
+      return
+    }
     setEditingItem(item)
     let initialFormData = { ...item }
+    if (activeView === 'main-categories') {
+      const { subcategories, ...rest } = initialFormData
+      initialFormData = rest
+    }
     if (item.subjectId) {
       const curSubject = subjects.find(s => s.id === item.subjectId)
       if (curSubject) {
@@ -738,6 +1230,12 @@ export default function AdminPage() {
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-3">
+              <Button variant="outline" size="sm" onClick={() => { setActiveView('main-categories'); openAddDialog() }} className="gap-2">
+                <Plus className="h-4 w-4" /> Add Main Category
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => { setActiveView('subcategories'); openAddDialog() }} className="gap-2">
+                <Plus className="h-4 w-4" /> Add Sub Category
+              </Button>
               <Button variant="outline" size="sm" onClick={() => { setActiveView('classes'); openAddDialog() }} className="gap-2">
                 <Plus className="h-4 w-4" /> Add Class
               </Button>
@@ -779,17 +1277,266 @@ export default function AdminPage() {
     )
   }
 
-  // ─── Classes Manager ────────────────────────────────────────────
-  const renderClasses = () => (
+  // ─── Main Categories Manager ─────────────────────────────────────
+  const renderMainCategories = () => (
     <div>
-      {loading ? renderSkeleton() : classes.length === 0 ? renderEmpty('No classes found') : (
+      {loading ? renderSkeleton() : categories.length === 0 ? renderEmpty('No main categories found') : (
         <div className="rounded-lg border overflow-hidden">
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/50">
                 <TableHead>Name</TableHead>
                 <TableHead className="hidden sm:table-cell">Slug</TableHead>
+                <TableHead className="hidden md:table-cell">Icon</TableHead>
+                <TableHead className="hidden lg:table-cell">Subcategories</TableHead>
+                <TableHead className="hidden lg:table-cell">Order</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {categories.map((cat) => (
+                <TableRow key={cat.id}>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      <div className={`h-6 w-6 rounded-md bg-gradient-to-r ${cat.color} shrink-0`} />
+                      <span>{cat.name}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="hidden sm:table-cell text-muted-foreground">{cat.slug}</TableCell>
+                  <TableCell className="hidden md:table-cell text-muted-foreground">{cat.icon}</TableCell>
+                  <TableCell className="hidden lg:table-cell">{cat.subcategories?.length || 0}</TableCell>
+                  <TableCell className="hidden lg:table-cell">{cat.order}</TableCell>
+                  <TableCell>
+                    <Badge variant={cat.isActive ? 'default' : 'secondary'} className={cat.isActive ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : ''}>
+                      {cat.isActive ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button size="icon" variant="ghost" onClick={() => openEditDialog(cat)} className="h-8 w-8">
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button size="icon" variant="ghost" onClick={() => openDeleteDialog(cat)} className="h-8 w-8 text-destructive">
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  )
+
+  // ─── Subcategories Manager ───────────────────────────────────────
+  const renderSubcategories = () => (
+    <div>
+      <div className="flex gap-3 mb-4">
+        <Select value={filterCategoryId} onValueChange={setFilterCategoryId}>
+          <SelectTrigger className="w-56"><SelectValue placeholder="Filter by main category" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Main Categories</SelectItem>
+            {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+      {loading ? renderSkeleton() : subcategories.length === 0 ? renderEmpty('No sub categories found') : (
+        <div className="rounded-lg border overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/50">
+                <TableHead>Name</TableHead>
+                <TableHead className="hidden sm:table-cell">Main Category</TableHead>
+                <TableHead className="hidden md:table-cell">Description</TableHead>
+                <TableHead className="hidden lg:table-cell">Order</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {subcategories.map((sub) => (
+                <TableRow key={sub.id}>
+                  <TableCell className="font-medium">{sub.name}</TableCell>
+                  <TableCell className="hidden sm:table-cell text-muted-foreground">
+                    {categories.find(c => c.id === sub.categoryId)?.name || '-'}
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell text-muted-foreground">{sub.description || '-'}</TableCell>
+                  <TableCell className="hidden lg:table-cell">{sub.order}</TableCell>
+                  <TableCell>
+                    <Badge variant={sub.isActive ? 'default' : 'secondary'} className={sub.isActive ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : ''}>
+                      {sub.isActive ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button size="icon" variant="ghost" onClick={() => openEditDialog(sub)} className="h-8 w-8">
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button size="icon" variant="ghost" onClick={() => openDeleteDialog(sub)} className="h-8 w-8 text-destructive">
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  )
+
+  // ─── Categories Manager (Combined) ─────────────────────────────────
+  const renderCategories = () => {
+    const [activeTab, setActiveTab] = useState<'main' | 'sub'>('main')
+    
+    return (
+      <div>
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'main' | 'sub')} className="mb-4">
+          <TabsList>
+            <TabsTrigger value="main">Main Categories</TabsTrigger>
+            <TabsTrigger value="sub">Subcategories</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        
+        {activeTab === 'main' ? (
+          <div>
+            {loading ? renderSkeleton() : categories.length === 0 ? renderEmpty('No main categories found') : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50">
+                      <TableHead>Name</TableHead>
+                      <TableHead className="hidden sm:table-cell">Slug</TableHead>
+                      <TableHead className="hidden md:table-cell">Icon</TableHead>
+                      <TableHead className="hidden lg:table-cell">Subcategories</TableHead>
+                      <TableHead className="hidden lg:table-cell">Order</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {categories.map((cat) => (
+                      <TableRow key={cat.id}>
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-2">
+                            <div className={`h-6 w-6 rounded-md bg-gradient-to-r ${cat.color} shrink-0`} />
+                            <span>{cat.name}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell text-muted-foreground">{cat.slug}</TableCell>
+                        <TableCell className="hidden md:table-cell text-muted-foreground">{cat.icon}</TableCell>
+                        <TableCell className="hidden lg:table-cell">{cat.subcategories?.length || 0}</TableCell>
+                        <TableCell className="hidden lg:table-cell">{cat.order}</TableCell>
+                        <TableCell>
+                          <Badge variant={cat.isActive ? 'default' : 'secondary'} className={cat.isActive ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : ''}>
+                            {cat.isActive ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button size="icon" variant="ghost" onClick={() => openEditDialog(cat)} className="h-8 w-8">
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button size="icon" variant="ghost" onClick={() => openDeleteDialog(cat)} className="h-8 w-8 text-destructive">
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
+            <div className="flex gap-3 mb-4">
+              <Select value={filterCategoryId} onValueChange={setFilterCategoryId}>
+                <SelectTrigger className="w-56"><SelectValue placeholder="Filter by main category" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Main Categories</SelectItem>
+                  {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            {loading ? renderSkeleton() : subcategories.length === 0 ? renderEmpty('No sub categories found') : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50">
+                      <TableHead>Name</TableHead>
+                      <TableHead className="hidden sm:table-cell">Main Category</TableHead>
+                      <TableHead className="hidden md:table-cell">Description</TableHead>
+                      <TableHead className="hidden lg:table-cell">Order</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {subcategories.map((sub) => (
+                      <TableRow key={sub.id}>
+                        <TableCell className="font-medium">{sub.name}</TableCell>
+                        <TableCell className="hidden sm:table-cell text-muted-foreground">
+                          {categories.find(c => c.id === sub.categoryId)?.name || '-'}
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell text-muted-foreground">{sub.description || '-'}</TableCell>
+                        <TableCell className="hidden lg:table-cell">{sub.order}</TableCell>
+                        <TableCell>
+                          <Badge variant={sub.isActive ? 'default' : 'secondary'} className={sub.isActive ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : ''}>
+                            {sub.isActive ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button size="icon" variant="ghost" onClick={() => openEditDialog(sub)} className="h-8 w-8">
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button size="icon" variant="ghost" onClick={() => openDeleteDialog(sub)} className="h-8 w-8 text-destructive">
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ─── Classes Manager ────────────────────────────────────────────
+  const renderClasses = () => {
+    const unassigned = classes.filter(c => !c.categoryId).length
+    return (
+    <div>
+      {unassigned > 0 && !loading && (
+        <div className="mb-4 flex items-start gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-sm text-amber-700 dark:text-amber-300">
+          <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+          <span>
+            <strong>{unassigned} class{unassigned > 1 ? 'es' : ''}</strong> {unassigned > 1 ? 'have' : 'has'} no Category assigned.
+            Click the <strong>Edit (✏)</strong> button on each class and set <strong>Main Category</strong> &amp; <strong>Subcategory</strong> so they appear correctly on the home page filter.
+          </span>
+        </div>
+      )}
+      {loading ? renderSkeleton() : classes.length === 0 ? renderEmpty('No classes found') : (
+        <div className="rounded-lg border overflow-hidden">
+
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/50">
+                <TableHead>Name</TableHead>
+                <TableHead className="hidden sm:table-cell">Slug</TableHead>
                 <TableHead className="hidden md:table-cell">Number</TableHead>
+                <TableHead className="hidden lg:table-cell">Category</TableHead>
                 <TableHead className="hidden lg:table-cell">Order</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -807,6 +1554,23 @@ export default function AdminPage() {
                   </TableCell>
                   <TableCell className="hidden sm:table-cell text-muted-foreground">{cls.slug}</TableCell>
                   <TableCell className="hidden md:table-cell">{cls.number}</TableCell>
+                  <TableCell className="hidden lg:table-cell">
+                    {cls.categoryId
+                      ? (() => {
+                          const cat = categories.find(c => c.id === cls.categoryId)
+                          const sub = cls.subcategoryId
+                            ? cat?.subcategories?.find(s => s.id === cls.subcategoryId)
+                            : null
+                          return (
+                            <div className="flex flex-col gap-0.5">
+                              {cat && <Badge variant="outline" className="text-xs w-fit">{cat.name}</Badge>}
+                              {sub && <span className="text-xs text-muted-foreground">{sub.name}</span>}
+                            </div>
+                          )
+                        })()
+                      : <Badge variant="outline" className="text-xs text-amber-600 border-amber-400 bg-amber-50 dark:bg-amber-950/30">⚠ No Category</Badge>
+                    }
+                  </TableCell>
                   <TableCell className="hidden lg:table-cell">{cls.order}</TableCell>
                   <TableCell>
                     <Badge variant={cls.isActive ? 'default' : 'secondary'} className={cls.isActive ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : ''}>
@@ -830,7 +1594,8 @@ export default function AdminPage() {
         </div>
       )}
     </div>
-  )
+    )
+  }
 
   // ─── Subjects Manager ────────────────────────────────────────────
   const renderSubjects = () => (
@@ -893,83 +1658,266 @@ export default function AdminPage() {
   )
 
   // ─── Chapters Manager ────────────────────────────────────────────
-  const renderChapters = () => (
-    <div>
-      <div className="flex flex-wrap gap-3 mb-4">
-        {/* Class filter */}
-        <Select
-          value={filterClassId}
-          onValueChange={(val) => {
-            setFilterClassId(val)
-            setFilterSubjectId('all') // reset subject when class changes
-          }}
-        >
-          <SelectTrigger className="w-48"><SelectValue placeholder="Filter by class" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Classes</SelectItem>
-            {classes.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+  const renderChapters = () => {
+    const handleImageVisibleToggle = async (ch: ChapterItem, checked: boolean) => {
+      try {
+        const res = await fetch(`/api/chapters/${ch.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageVisible: checked }),
+        })
+        if (res.ok) {
+          const updated = await res.json()
+          setLocalChapters(prev => prev.map(c => c.id === updated.id ? updated : c))
+          setChapters(prev => prev.map(c => c.id === updated.id ? updated : c))
+          toast({
+            title: checked ? '🔓 ছবি দৃশ্যমান করা হয়েছে' : '🔒 ছবি হাইড করা হয়েছে',
+            description: `Chapter image ${checked ? 'visible' : 'hidden'} successfully.`
+          })
+        }
+      } catch {
+        toast({ title: 'Error', description: 'Failed to update image visibility.', variant: 'destructive' })
+      }
+    }
 
-        {/* Subject filter — filtered by selected class */}
-        <Select value={filterSubjectId} onValueChange={setFilterSubjectId}>
-          <SelectTrigger className="w-48"><SelectValue placeholder="Filter by subject" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Subjects</SelectItem>
-            {subjects
-              .filter(s => filterClassId === 'all' || s.classId === filterClassId)
-              .map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
-      {loading ? renderSkeleton() : chapters.length === 0 ? renderEmpty('No chapters found') : (
-        <div className="rounded-lg border overflow-hidden">
-          <Table>
-            <TableHeader>
-              <TableRow className="bg-muted/50">
-                <TableHead>Name</TableHead>
-                <TableHead className="hidden sm:table-cell">Class</TableHead>
-                <TableHead className="hidden sm:table-cell">Subject</TableHead>
-                <TableHead className="hidden md:table-cell">Slug</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {chapters.map((ch) => (
-                <TableRow key={ch.id}>
-                  <TableCell className="font-medium">
-                    <div className="flex items-center gap-2">
-                      {ch.icon && <span>{ch.icon}</span>}
-                      <span>{ch.name}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="hidden sm:table-cell text-muted-foreground">{ch.subject?.class?.name || '-'}</TableCell>
-                  <TableCell className="hidden sm:table-cell text-muted-foreground">{ch.subject?.name || '-'}</TableCell>
-                  <TableCell className="hidden md:table-cell text-muted-foreground">{ch.slug}</TableCell>
-                  <TableCell>
-                    <Badge variant={ch.isActive ? 'default' : 'secondary'} className={ch.isActive ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : ''}>
+    return (
+      <div>
+        <div className="flex flex-wrap gap-3 mb-4">
+          {/* Class filter */}
+          <Select value={filterClassId} onValueChange={(val) => { setFilterClassId(val); setFilterSubjectId('all') }}>
+            <SelectTrigger className="w-48"><SelectValue placeholder="Filter by class" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Classes</SelectItem>
+              {classes.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+
+          {/* Subject filter */}
+          <Select value={filterSubjectId} onValueChange={setFilterSubjectId}>
+            <SelectTrigger className="w-48"><SelectValue placeholder="Filter by subject" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Subjects</SelectItem>
+              {subjects.filter(s => filterClassId === 'all' || s.classId === filterClassId)
+                .map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {loading ? renderSkeleton() : localChapters.length === 0 ? renderEmpty('No chapters found') : (
+          <div className="rounded-lg border overflow-hidden divide-y">
+            {/* Table header */}
+            <div className="hidden sm:grid grid-cols-[2fr_1fr_1fr_1fr_80px_140px] gap-2 px-4 py-2 bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              <span>Name</span><span>Class</span><span>Subject</span><span>Slug</span><span>Status</span><span className="text-right">Actions</span>
+            </div>
+
+            {/* Chapter rows */}
+            {localChapters.map((ch) => (
+              <div key={ch.id}>
+                {/* Main row */}
+                <div className="grid grid-cols-[1fr_auto] sm:grid-cols-[2fr_1fr_1fr_1fr_80px_140px] gap-2 items-center px-4 py-3 hover:bg-muted/10 transition-colors">
+                  {/* Name */}
+                  <div className="flex items-center gap-2 min-w-0">
+                    {ch.icon && <span className="shrink-0">{ch.icon}</span>}
+                    <span className="font-medium text-sm truncate">{ch.name}</span>
+                    {ch.imageUrl && (
+                      <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 font-semibold">
+                        📸 {ch.imageVisible !== false ? 'ছবি আছে' : '🙈 Hidden'}
+                      </span>
+                    )}
+                  </div>
+                  {/* Class */}
+                  <span className="hidden sm:block text-sm text-muted-foreground truncate">{ch.subject?.class?.name || '-'}</span>
+                  {/* Subject */}
+                  <span className="hidden sm:block text-sm text-muted-foreground truncate">{ch.subject?.name || '-'}</span>
+                  {/* Slug */}
+                  <span className="hidden sm:block text-xs text-muted-foreground font-mono truncate">{ch.slug}</span>
+                  {/* Status */}
+                  <div className="hidden sm:flex">
+                    <Badge variant={ch.isActive ? 'default' : 'secondary'} className={ch.isActive ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-xs' : 'text-xs'}>
                       {ch.isActive ? 'Active' : 'Inactive'}
                     </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button size="icon" variant="ghost" onClick={() => openEditDialog(ch)} className="h-8 w-8">
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button size="icon" variant="ghost" onClick={() => openDeleteDialog(ch)} className="h-8 w-8 text-destructive">
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                  </div>
+                  {/* Actions */}
+                  <div className="flex items-center justify-end gap-1">
+                    <Button
+                      size="icon"
+                      variant={expandedPreviewId === ch.id ? 'secondary' : 'ghost'}
+                      onClick={() => togglePreview(ch.id)}
+                      className="h-8 w-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                      title="Preview Content"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                    <Button size="icon" variant="ghost" onClick={() => openEditDialog(ch)} className="h-8 w-8">
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button size="icon" variant="ghost" onClick={() => openDeleteDialog(ch)} className="h-8 w-8 text-destructive">
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Direct image preview under the chapter row */}
+                {ch.imageUrl && (
+                  <div className="flex items-center justify-between gap-4 px-4 py-2 bg-muted/10 border-t text-xs">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={ch.imageUrl}
+                        alt="Preview"
+                        className={`h-12 w-20 object-cover rounded border bg-muted/20 transition-all ${ch.imageVisible !== false ? '' : 'opacity-40 grayscale'}`}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
+                      <div className="min-w-0">
+                        <p className="font-medium text-muted-foreground flex items-center gap-1">
+                          📸 ছবি প্রিভিউ {ch.imageVisible !== false ? '' : '(লুকানো)'}
+                        </p>
+                        <span className="text-[10px] font-mono text-muted-foreground truncate block max-w-[200px] sm:max-w-md">
+                          {ch.imageUrl}
+                        </span>
+                      </div>
                     </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-    </div>
-  )
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-muted-foreground select-none">UI-তে দেখাবে</span>
+                      <Switch
+                        checked={ch.imageVisible !== false}
+                        onCheckedChange={(checked) => handleImageVisibleToggle(ch, checked)}
+                        className="scale-90"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Live chapter content preview underneath the chapter row */}
+                {expandedPreviewId === ch.id && (
+                  <div className="border-t bg-muted/5 px-4 py-4 space-y-4">
+                    {previewLoadingId === ch.id ? (
+                      <div className="space-y-2">
+                        <Skeleton className="h-4 w-1/3" />
+                        <Skeleton className="h-20 w-full" />
+                        <Skeleton className="h-20 w-full" />
+                      </div>
+                    ) : previewData[ch.id] ? (
+                      <div className="bg-background rounded-xl border p-4 shadow-sm">
+                        <div className="flex items-center justify-between border-b pb-2 mb-3">
+                          <h3 className="font-semibold text-sm text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                            👁️ চ্যাপ্টার লাইভ প্রিভিউ (ছাত্রদের ইন্টারফেস)
+                          </h3>
+                          <span className="text-[10px] text-muted-foreground uppercase font-semibold tracking-wider">
+                            {ch.name}
+                          </span>
+                        </div>
+
+                        <Tabs defaultValue="explanations" className="w-full">
+                          <TabsList className="grid w-full grid-cols-3 max-w-md mb-4 bg-muted/50 p-1 rounded-lg">
+                            <TabsTrigger value="explanations" className="text-xs py-1.5 flex items-center gap-1">
+                              <BookOpen className="h-3.5 w-3.5" />
+                              <span>মেইন বুক প্রশ্নোত্তর ({previewData[ch.id].explanations?.length || 0})</span>
+                            </TabsTrigger>
+                            <TabsTrigger value="creative" className="text-xs py-1.5 flex items-center gap-1">
+                              <Lightbulb className="h-3.5 w-3.5" />
+                              <span>সৃজনশীল প্রশ্ন ({previewData[ch.id].creativeQuestions?.length || 0})</span>
+                            </TabsTrigger>
+                            <TabsTrigger value="mcq" className="text-xs py-1.5 flex items-center gap-1">
+                              <CheckSquare className="h-3.5 w-3.5" />
+                              <span>MCQ ({previewData[ch.id].mcqQuestions?.length || 0})</span>
+                            </TabsTrigger>
+                          </TabsList>
+
+                          <TabsContent value="explanations" className="mt-0">
+                            <div className="space-y-2">
+                              <div className="flex justify-end mb-2">
+                                <Button
+                                  size="sm"
+                                  onClick={() => {
+                                    setExplanationEditing(null)
+                                    setFilterChapterId(ch.id)
+                                    setExplanationEditorOpen(true)
+                                  }}
+                                  className="h-7 text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                                >
+                                  <span>➕ Add Main Book Q&A</span>
+                                </Button>
+                              </div>
+                              <ExplanationTab
+                                explanations={previewData[ch.id].explanations || []}
+                                isAdmin={true}
+                                onEdit={(exp) => {
+                                  setExplanationEditing(exp as any)
+                                  setFilterChapterId(ch.id)
+                                  setExplanationEditorOpen(true)
+                                }}
+                              />
+                            </div>
+                          </TabsContent>
+                          <TabsContent value="creative" className="mt-0">
+                            <div className="space-y-2">
+                              <div className="flex justify-end mb-2">
+                                <Button
+                                  size="sm"
+                                  onClick={() => {
+                                    setCqEditing(null)
+                                    setFilterChapterId(ch.id)
+                                    setCqEditorOpen(true)
+                                  }}
+                                  className="h-7 text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                                >
+                                  <span>➕ Add Creative Question</span>
+                                </Button>
+                              </div>
+                              <CreativeTab
+                                creativeQuestions={previewData[ch.id].creativeQuestions || []}
+                                isAdmin={true}
+                                onEdit={(cq) => {
+                                  setCqEditing(cq as any)
+                                  setFilterChapterId(ch.id)
+                                  setCqEditorOpen(true)
+                                }}
+                              />
+                            </div>
+                          </TabsContent>
+                          <TabsContent value="mcq" className="mt-0">
+                            <div className="space-y-2">
+                              <div className="flex justify-end mb-2">
+                                <Button
+                                  size="sm"
+                                  onClick={() => {
+                                    setMcqEditing(null)
+                                    setFilterChapterId(ch.id)
+                                    setMcqEditorOpen(true)
+                                  }}
+                                  className="h-7 text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                                >
+                                  <span>➕ Add MCQ Question</span>
+                                </Button>
+                              </div>
+                              <McqTab
+                                mcqQuestions={previewData[ch.id].mcqQuestions || []}
+                                isAdmin={true}
+                                onEdit={(mcq) => {
+                                  setMcqEditing(mcq as any)
+                                  setFilterChapterId(ch.id)
+                                  setMcqEditorOpen(true)
+                                }}
+                              />
+                            </div>
+                          </TabsContent>
+                        </Tabs>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-destructive">⚠️ প্রিভিউ লোড করা সম্ভব হয়নি</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   // ─── MCQ Questions Manager ────────────────────────────────────────
   const renderMcqQuestions = () => (
@@ -1382,6 +2330,7 @@ export default function AdminPage() {
                   <TableHead>User</TableHead>
                   <TableHead className="hidden sm:table-cell">Email</TableHead>
                   <TableHead>Role</TableHead>
+                  <TableHead className="hidden xl:table-cell">Username</TableHead>
                   <TableHead className="hidden md:table-cell">Phone</TableHead>
                   <TableHead className="hidden lg:table-cell">Class</TableHead>
                   <TableHead className="hidden md:table-cell">Joined</TableHead>
@@ -1412,6 +2361,15 @@ export default function AdminPage() {
                       }`}>
                         {user.role}
                       </Badge>
+                    </TableCell>
+                    <TableCell className="hidden xl:table-cell text-xs">
+                      {user.username ? (
+                        <Link href={`/t/${user.username}`} target="_blank" className="text-emerald-600 hover:underline font-mono">
+                          @{user.username}
+                        </Link>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </TableCell>
                     <TableCell className="hidden md:table-cell text-muted-foreground text-xs">
                       {user.phone || '-'}
@@ -1625,19 +2583,117 @@ export default function AdminPage() {
 
   const renderFormFields = () => {
     switch (activeView) {
+      case 'main-categories':
+        return (
+          <>
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input
+                value={formData.name || ''}
+                onChange={e => setFormData(f => ({
+                  ...f,
+                  name: e.target.value,
+                  slug: f.slug || e.target.value.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+                }))}
+              />
+            </div>
+            <div className="space-y-2"><Label>Slug</Label><Input value={formData.slug || ''} onChange={e => setFormData(f => ({ ...f, slug: e.target.value }))} /></div>
+            <div className="space-y-2"><Label>Description</Label><Textarea value={formData.description || ''} onChange={e => setFormData(f => ({ ...f, description: e.target.value }))} rows={2} /></div>
+            <div className="space-y-2">
+              <Label>Icon</Label>
+              <Select value={formData.icon || 'GraduationCap'} onValueChange={v => setFormData(f => ({ ...f, icon: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select icon" /></SelectTrigger>
+                <SelectContent>
+                  {CATEGORY_ICON_OPTIONS.map(opt => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Color</Label>
+              <Select value={formData.color || 'from-emerald-500 to-teal-600'} onValueChange={v => setFormData(f => ({ ...f, color: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select color" /></SelectTrigger>
+                <SelectContent>
+                  {CATEGORY_COLOR_OPTIONS.map(opt => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2"><Label>Order</Label><Input type="number" value={formData.order ?? 0} onChange={e => {
+                const val = e.target.value;
+                setFormData(f => ({ ...f, order: val === '' ? '' : parseInt(val) || 0 }))
+              }} /></div>
+              <div className="space-y-2 flex items-center gap-2 pt-6">
+                <Switch checked={formData.isActive !== false} onCheckedChange={v => setFormData(f => ({ ...f, isActive: v }))} />
+                <Label>Active</Label>
+              </div>
+            </div>
+          </>
+        )
+      case 'subcategories':
+        return (
+          <>
+            <div className="space-y-2">
+              <Label>Main Category</Label>
+              <Select value={formData.categoryId || ''} onValueChange={v => setFormData(f => ({ ...f, categoryId: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select main category" /></SelectTrigger>
+                <SelectContent>
+                  {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2"><Label>Name</Label><Input value={formData.name || ''} onChange={e => setFormData(f => ({ ...f, name: e.target.value }))} /></div>
+            <div className="space-y-2"><Label>Description</Label><Textarea value={formData.description || ''} onChange={e => setFormData(f => ({ ...f, description: e.target.value }))} rows={2} /></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2"><Label>Order</Label><Input type="number" value={formData.order ?? 0} onChange={e => {
+                const val = e.target.value;
+                setFormData(f => ({ ...f, order: val === '' ? '' : parseInt(val) || 0 }))
+              }} /></div>
+              <div className="space-y-2 flex items-center gap-2 pt-6">
+                <Switch checked={formData.isActive !== false} onCheckedChange={v => setFormData(f => ({ ...f, isActive: v }))} />
+                <Label>Active</Label>
+              </div>
+            </div>
+          </>
+        )
       case 'classes':
         return (
           <>
+            <div className="space-y-2">
+              <Label>Main Category</Label>
+              <Select value={formData.categoryId || ''} onValueChange={v => setFormData(f => ({ ...f, categoryId: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select main category" /></SelectTrigger>
+                <SelectContent>
+                  {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Subcategory</Label>
+              <Select value={formData.subcategoryId || ''} onValueChange={v => setFormData(f => ({ ...f, subcategoryId: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select subcategory" /></SelectTrigger>
+                <SelectContent>
+                  {formData.categoryId && categories.find(c => c.id === formData.categoryId)?.subcategories?.map(s => (
+                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-2"><Label>Name</Label><Input value={formData.name || ''} onChange={e => setFormData(f => ({ ...f, name: e.target.value }))} /></div>
             <div className="space-y-2"><Label>Slug</Label><Input value={formData.slug || ''} onChange={e => setFormData(f => ({ ...f, slug: e.target.value }))} /></div>
-            <div className="space-y-2"><Label>Number</Label><Input type="number" value={formData.number || ''} onChange={e => setFormData(f => ({ ...f, number: parseInt(e.target.value) || 0 }))} /></div>
+            <div className="space-y-2"><Label>Number</Label><Input type="number" value={formData.number ?? ''} onChange={e => {
+              const val = e.target.value;
+              setFormData(f => ({ ...f, number: val === '' ? '' : parseInt(val) || 0 }))
+            }} /></div>
             <div className="space-y-2"><Label>Description</Label><Textarea value={formData.description || ''} onChange={e => setFormData(f => ({ ...f, description: e.target.value }))} rows={2} /></div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Icon (emoji)</Label><Input value={formData.icon || ''} onChange={e => setFormData(f => ({ ...f, icon: e.target.value }))} /></div>
               <div className="space-y-2"><Label>Color</Label><Input type="color" value={formData.color || '#10b981'} onChange={e => setFormData(f => ({ ...f, color: e.target.value }))} className="h-9" /></div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2"><Label>Order</Label><Input type="number" value={formData.order ?? 0} onChange={e => setFormData(f => ({ ...f, order: parseInt(e.target.value) || 0 }))} /></div>
+              <div className="space-y-2"><Label>Order</Label><Input type="number" value={formData.order ?? 0} onChange={e => {
+                const val = e.target.value;
+                setFormData(f => ({ ...f, order: val === '' ? '' : parseInt(val) || 0 }))
+              }} /></div>
               <div className="space-y-2 flex items-center gap-2 pt-6">
                 <Switch checked={formData.isActive !== false} onCheckedChange={v => setFormData(f => ({ ...f, isActive: v }))} />
                 <Label>Active</Label>
@@ -1648,8 +2704,26 @@ export default function AdminPage() {
       case 'subjects':
         return (
           <>
-            <div className="space-y-2"><Label>Name</Label><Input value={formData.name || ''} onChange={e => setFormData(f => ({ ...f, name: e.target.value }))} /></div>
-            <div className="space-y-2"><Label>Slug</Label><Input value={formData.slug || ''} onChange={e => setFormData(f => ({ ...f, slug: e.target.value }))} /></div>
+            <div className="space-y-2">
+              <Label>Main Category</Label>
+              <Select value={formData.categoryId || ''} onValueChange={v => setFormData(f => ({ ...f, categoryId: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select main category" /></SelectTrigger>
+                <SelectContent>
+                  {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Subcategory</Label>
+              <Select value={formData.subcategoryId || ''} onValueChange={v => setFormData(f => ({ ...f, subcategoryId: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select subcategory" /></SelectTrigger>
+                <SelectContent>
+                  {formData.categoryId && categories.find(c => c.id === formData.categoryId)?.subcategories?.map(s => (
+                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-2">
               <Label>Class</Label>
               <Select value={formData.classId || ''} onValueChange={v => setFormData(f => ({ ...f, classId: v }))}>
@@ -1659,13 +2733,18 @@ export default function AdminPage() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-2"><Label>Name</Label><Input value={formData.name || ''} onChange={e => setFormData(f => ({ ...f, name: e.target.value }))} /></div>
+            <div className="space-y-2"><Label>Slug</Label><Input value={formData.slug || ''} onChange={e => setFormData(f => ({ ...f, slug: e.target.value }))} /></div>
             <div className="space-y-2"><Label>Description</Label><Textarea value={formData.description || ''} onChange={e => setFormData(f => ({ ...f, description: e.target.value }))} rows={2} /></div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Icon (emoji)</Label><Input value={formData.icon || ''} onChange={e => setFormData(f => ({ ...f, icon: e.target.value }))} /></div>
               <div className="space-y-2"><Label>Color</Label><Input type="color" value={formData.color || '#10b981'} onChange={e => setFormData(f => ({ ...f, color: e.target.value }))} className="h-9" /></div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2"><Label>Order</Label><Input type="number" value={formData.order ?? 0} onChange={e => setFormData(f => ({ ...f, order: parseInt(e.target.value) || 0 }))} /></div>
+              <div className="space-y-2"><Label>Order</Label><Input type="number" value={formData.order ?? 0} onChange={e => {
+                const val = e.target.value;
+                setFormData(f => ({ ...f, order: val === '' ? '' : parseInt(val) || 0 }))
+              }} /></div>
               <div className="space-y-2 flex items-center gap-2 pt-6">
                 <Switch checked={formData.isActive !== false} onCheckedChange={v => setFormData(f => ({ ...f, isActive: v }))} />
                 <Label>Active</Label>
@@ -1676,8 +2755,26 @@ export default function AdminPage() {
       case 'chapters':
         return (
           <>
-            <div className="space-y-2"><Label>Name</Label><Input value={formData.name || ''} onChange={e => setFormData(f => ({ ...f, name: e.target.value }))} /></div>
-            <div className="space-y-2"><Label>Slug</Label><Input value={formData.slug || ''} onChange={e => setFormData(f => ({ ...f, slug: e.target.value }))} /></div>
+            <div className="space-y-2">
+              <Label>Main Category</Label>
+              <Select value={formData.categoryId || ''} onValueChange={v => setFormData(f => ({ ...f, categoryId: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select main category" /></SelectTrigger>
+                <SelectContent>
+                  {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Subcategory</Label>
+              <Select value={formData.subcategoryId || ''} onValueChange={v => setFormData(f => ({ ...f, subcategoryId: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select subcategory" /></SelectTrigger>
+                <SelectContent>
+                  {formData.categoryId && categories.find(c => c.id === formData.categoryId)?.subcategories?.map(s => (
+                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-2">
               <Label>Class</Label>
               <Select value={formData.classId || ''} onValueChange={v => setFormData(f => ({ ...f, classId: v, subjectId: '' }))}>
@@ -1696,13 +2793,18 @@ export default function AdminPage() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-2"><Label>Name</Label><Input value={formData.name || ''} onChange={e => setFormData(f => ({ ...f, name: e.target.value }))} /></div>
+            <div className="space-y-2"><Label>Slug</Label><Input value={formData.slug || ''} onChange={e => setFormData(f => ({ ...f, slug: e.target.value }))} /></div>
             <div className="space-y-2"><Label>Description</Label><Textarea value={formData.description || ''} onChange={e => setFormData(f => ({ ...f, description: e.target.value }))} rows={2} /></div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Icon (emoji)</Label><Input value={formData.icon || ''} onChange={e => setFormData(f => ({ ...f, icon: e.target.value }))} /></div>
               <div className="space-y-2"><Label>Color</Label><Input type="color" value={formData.color || '#10b981'} onChange={e => setFormData(f => ({ ...f, color: e.target.value }))} className="h-9" /></div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2"><Label>Order</Label><Input type="number" value={formData.order ?? 0} onChange={e => setFormData(f => ({ ...f, order: parseInt(e.target.value) || 0 }))} /></div>
+              <div className="space-y-2"><Label>Order</Label><Input type="number" value={formData.order ?? 0} onChange={e => {
+                const val = e.target.value;
+                setFormData(f => ({ ...f, order: val === '' ? '' : parseInt(val) || 0 }))
+              }} /></div>
               <div className="space-y-2 flex items-center gap-2 pt-6">
                 <Switch checked={formData.isActive !== false} onCheckedChange={v => setFormData(f => ({ ...f, isActive: v }))} />
                 <Label>Active</Label>
@@ -1758,7 +2860,10 @@ export default function AdminPage() {
             </div>
             <div className="space-y-2"><Label>Explanation</Label><Textarea value={formData.explanation || ''} onChange={e => setFormData(f => ({ ...f, explanation: e.target.value }))} rows={2} /></div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2"><Label>Marks</Label><Input type="number" value={formData.marks ?? 1} onChange={e => setFormData(f => ({ ...f, marks: parseInt(e.target.value) || 1 }))} /></div>
+              <div className="space-y-2"><Label>Marks</Label><Input type="number" value={formData.marks ?? 1} onChange={e => {
+                const val = e.target.value;
+                setFormData(f => ({ ...f, marks: val === '' ? '' : parseInt(val) || 1 }))
+              }} /></div>
               <div className="space-y-2"><Label>Tags (comma separated)</Label><Input value={formData.tags || ''} onChange={e => setFormData(f => ({ ...f, tags: e.target.value }))} /></div>
             </div>
             <div className="flex items-center gap-2">
@@ -1808,7 +2913,10 @@ export default function AdminPage() {
             <div className="space-y-2"><Label>Model Answer</Label><Textarea value={formData.answer || ''} onChange={e => setFormData(f => ({ ...f, answer: e.target.value }))} rows={3} /></div>
             <div className="space-y-2"><Label>Explanation</Label><Textarea value={formData.explanation || ''} onChange={e => setFormData(f => ({ ...f, explanation: e.target.value }))} rows={2} /></div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2"><Label>Marks</Label><Input type="number" value={formData.marks ?? 10} onChange={e => setFormData(f => ({ ...f, marks: parseInt(e.target.value) || 10 }))} /></div>
+              <div className="space-y-2"><Label>Marks</Label><Input type="number" value={formData.marks ?? 10} onChange={e => {
+                const val = e.target.value;
+                setFormData(f => ({ ...f, marks: val === '' ? '' : parseInt(val) || 10 }))
+              }} /></div>
               <div className="space-y-2"><Label>Tags (comma separated)</Label><Input value={formData.tags || ''} onChange={e => setFormData(f => ({ ...f, tags: e.target.value }))} /></div>
             </div>
             <div className="flex items-center gap-2">
@@ -1942,9 +3050,18 @@ export default function AdminPage() {
               <div className="space-y-2"><Label>Source IDs (JSON)</Label><Input value={formData.sourceIds || '[]'} onChange={e => setFormData(f => ({ ...f, sourceIds: e.target.value }))} /></div>
             </div>
             <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2"><Label>Total Questions</Label><Input type="number" value={formData.totalQuestions ?? 10} onChange={e => setFormData(f => ({ ...f, totalQuestions: parseInt(e.target.value) || 10 }))} /></div>
-              <div className="space-y-2"><Label>Marks/Question</Label><Input type="number" value={formData.marksPerQuestion ?? 1} onChange={e => setFormData(f => ({ ...f, marksPerQuestion: parseInt(e.target.value) || 1 }))} /></div>
-              <div className="space-y-2"><Label>Duration (min)</Label><Input type="number" value={formData.duration ?? 30} onChange={e => setFormData(f => ({ ...f, duration: parseInt(e.target.value) || 30 }))} /></div>
+              <div className="space-y-2"><Label>Total Questions</Label><Input type="number" value={formData.totalQuestions ?? 10} onChange={e => {
+                const val = e.target.value;
+                setFormData(f => ({ ...f, totalQuestions: val === '' ? '' : parseInt(val) || 10 }))
+              }} /></div>
+              <div className="space-y-2"><Label>Marks/Question</Label><Input type="number" value={formData.marksPerQuestion ?? 1} onChange={e => {
+                const val = e.target.value;
+                setFormData(f => ({ ...f, marksPerQuestion: val === '' ? '' : parseInt(val) || 1 }))
+              }} /></div>
+              <div className="space-y-2"><Label>Duration (min)</Label><Input type="number" value={formData.duration ?? 30} onChange={e => {
+                const val = e.target.value;
+                setFormData(f => ({ ...f, duration: val === '' ? '' : parseInt(val) || 30 }))
+              }} /></div>
             </div>
             <div className="flex items-center gap-2">
               <Switch checked={formData.isActive !== false} onCheckedChange={v => setFormData(f => ({ ...f, isActive: v }))} />
@@ -1958,7 +3075,10 @@ export default function AdminPage() {
             <div className="space-y-2"><Label>Quote Text (Bengali)</Label><Textarea value={formData.text || ''} onChange={e => setFormData(f => ({ ...f, text: e.target.value }))} rows={3} /></div>
             <div className="space-y-2"><Label>Author</Label><Input value={formData.author || ''} onChange={e => setFormData(f => ({ ...f, author: e.target.value }))} placeholder="e.g. রবীন্দ্রনাথ ঠাকুর" /></div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2"><Label>Order</Label><Input type="number" value={formData.order ?? 0} onChange={e => setFormData(f => ({ ...f, order: parseInt(e.target.value) || 0 }))} /></div>
+              <div className="space-y-2"><Label>Order</Label><Input type="number" value={formData.order ?? 0} onChange={e => {
+                const val = e.target.value;
+                setFormData(f => ({ ...f, order: val === '' ? '' : parseInt(val) || 0 }))
+              }} /></div>
               <div className="space-y-2 flex items-center gap-2 pt-6">
                 <Switch checked={formData.isActive !== false} onCheckedChange={v => setFormData(f => ({ ...f, isActive: v }))} />
                 <Label>Active</Label>
@@ -2048,6 +3168,21 @@ export default function AdminPage() {
                 </Select>
               </div>
             </div>
+            {(formData.role === 'teacher' || formData.role === 'admin') && (
+              <div className="space-y-2">
+                <Label>Teacher Username <span className="text-muted-foreground text-xs">(for /t/[username] panel URL)</span></Label>
+                <Input
+                  value={formData.username || ''}
+                  onChange={e => setFormData(f => ({ ...f, username: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') }))}
+                  placeholder="e.g. john_doe"
+                />
+                {formData.username && (
+                  <p className="text-xs text-muted-foreground">
+                    Panel URL: <code className="font-mono text-emerald-600">/t/{formData.username}</code>
+                  </p>
+                )}
+              </div>
+            )}
           </>
         )
       default:
@@ -2076,9 +3211,194 @@ export default function AdminPage() {
   )
 
   // ─── View Content ─────────────────────────────────────────────────
+  // ─── Pending Approvals View ───────────────────────────────────────
+  const renderPendingApprovals = () => {
+    const pending = pendingChanges.filter(p => p.status === 'pending')
+    const resolved = pendingChanges.filter(p => p.status !== 'pending')
+
+    const handleDecision = async (id: string, decision: 'approved' | 'rejected') => {
+      try {
+        const res = await fetch(`/api/pending/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: decision }),
+        })
+        if (res.ok) {
+          toast({ title: decision === 'approved' ? '✅ Approved' : '❌ Rejected', description: `Change has been ${decision}.` })
+          fetchPendingChanges()
+        } else {
+          toast({ title: 'Error', description: 'Failed to process decision.', variant: 'destructive' })
+        }
+      } catch {
+        toast({ title: 'Error', description: 'Network error.', variant: 'destructive' })
+      }
+    }
+
+    const PendingCard = ({ item, resolved: isResolved }: { item: typeof pendingChanges[0]; resolved?: boolean }) => (
+      <Card className="border-0 shadow-sm">
+        <CardContent className="p-4">
+          <div className="flex flex-col sm:flex-row sm:items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap mb-1">
+                <Badge className="text-[10px] px-1.5 py-0 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-0">
+                  {item.contentType}
+                </Badge>
+                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${
+                  item.status === 'approved' ? 'border-emerald-300 text-emerald-700 dark:text-emerald-400' :
+                  item.status === 'rejected' ? 'border-red-300 text-red-700 dark:text-red-400' :
+                  'border-amber-300 text-amber-700 dark:text-amber-400'
+                }`}>
+                  {item.status}
+                </Badge>
+              </div>
+              <p className="text-sm font-medium truncate">
+                By: <span className="text-muted-foreground">{item.teacherId?.name || item.teacherId?.email}</span>
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Content ID: <code className="font-mono">{item.contentId}</code>
+              </p>
+              <details className="mt-2">
+                <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">View payload</summary>
+                <pre className="mt-1 text-[10px] bg-muted rounded p-2 overflow-auto max-h-32 font-mono">
+                  {JSON.stringify(item.payload, null, 2)}
+                </pre>
+              </details>
+              <p className="text-[10px] text-muted-foreground mt-2">
+                {new Date(item.createdAt).toLocaleString()}
+              </p>
+            </div>
+            {!isResolved && (
+              <div className="flex gap-2 shrink-0">
+                <Button size="sm" className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                  onClick={() => handleDecision(item._id, 'approved')}>
+                  <CheckCircle className="h-3.5 w-3.5" /> Approve
+                </Button>
+                <Button size="sm" variant="outline" className="h-8 text-red-600 border-red-200 hover:bg-red-50 gap-1"
+                  onClick={() => handleDecision(item._id, 'rejected')}>
+                  <AlertCircle className="h-3.5 w-3.5" /> Reject
+                </Button>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    )
+
+    return (
+      <div className="space-y-6">
+        {/* Pending Section */}
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-base font-semibold flex items-center gap-2">
+              <span className="h-6 w-6 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+                <ClipboardList className="h-3.5 w-3.5 text-amber-600" />
+              </span>
+              Pending ({pending.length})
+            </h2>
+            <Button size="sm" variant="ghost" onClick={fetchPendingChanges} className="gap-1 h-8 text-xs">
+              <RefreshCw className="h-3 w-3" /> Refresh
+            </Button>
+          </div>
+          {pendingLoading ? (
+            <div className="space-y-3">{[1,2,3].map(i => <Skeleton key={i} className="h-28 rounded-lg" />)}</div>
+          ) : pending.length === 0 ? (
+            <Card className="border-0 shadow-sm">
+              <CardContent className="py-12 text-center">
+                <CheckCircle className="h-10 w-10 mx-auto text-emerald-400 mb-3" />
+                <p className="text-sm text-muted-foreground">No pending approvals 🎉</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              {pending.map(item => <PendingCard key={item._id} item={item} />)}
+            </div>
+          )}
+        </div>
+
+        {/* Resolved Section */}
+        {resolved.length > 0 && (
+          <div>
+            <h2 className="text-base font-semibold flex items-center gap-2 mb-3">
+              <span className="h-6 w-6 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
+                <CheckCircle className="h-3.5 w-3.5 text-gray-500" />
+              </span>
+              Resolved ({resolved.length})
+            </h2>
+            <div className="space-y-3">
+              {resolved.slice(0, 10).map(item => <PendingCard key={item._id} item={item} resolved />)}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ─── Recent Activity View ─────────────────────────────────────────
+  const renderRecentActivity = () => {
+    const actionColor = (action: string) => {
+      if (action.includes('approved') || action.includes('create')) return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+      if (action.includes('rejected') || action.includes('delete')) return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+      if (action.includes('submit') || action.includes('update') || action.includes('edit')) return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+      if (action.includes('class_change')) return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+      return 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
+    }
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <span className="h-6 w-6 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+              <Activity className="h-3.5 w-3.5 text-blue-600" />
+            </span>
+            Recent Activity
+          </h2>
+          <Button size="sm" variant="ghost" onClick={fetchActivityLog} className="gap-1 h-8 text-xs">
+            <RefreshCw className="h-3 w-3" /> Refresh
+          </Button>
+        </div>
+
+        {activityLoading ? (
+          <div className="space-y-3">{[1,2,3,4,5].map(i => <Skeleton key={i} className="h-16 rounded-lg" />)}</div>
+        ) : activityLog.length === 0 ? (
+          <Card className="border-0 shadow-sm">
+            <CardContent className="py-12 text-center">
+              <Activity className="h-10 w-10 mx-auto text-muted-foreground mb-3 opacity-40" />
+              <p className="text-sm text-muted-foreground">No activity recorded yet.</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {activityLog.map((entry) => (
+              <Card key={entry._id} className="border-0 shadow-sm hover:shadow-md transition-shadow">
+                <CardContent className="p-3 flex items-start gap-3">
+                  <div className={`mt-0.5 h-7 w-7 rounded-full flex items-center justify-center shrink-0 ${actionColor(entry.action)}`}>
+                    <Activity className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium">{entry.userId?.name || entry.userId?.email || 'Unknown User'}</span>
+                      <Badge variant="outline" className={`text-[10px] px-1.5 py-0 border-0 ${actionColor(entry.action)}`}>
+                        {entry.action}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{entry.description}</p>
+                    <p className="text-[10px] text-muted-foreground mt-1">{new Date(entry.createdAt).toLocaleString()}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const renderView = () => {
     switch (activeView) {
       case 'dashboard': return renderDashboard()
+      case 'main-categories': return renderMainCategories()
+      case 'subcategories': return renderSubcategories()
+      case 'categories': return renderCategories()
       case 'classes': return renderClasses()
       case 'subjects': return renderSubjects()
       case 'chapters': return renderChapters()
@@ -2090,13 +3410,16 @@ export default function AdminPage() {
       case 'quotes': return renderQuotes()
       case 'users': return renderUsers()
       case 'settings': return renderSettings()
+      case 'pending-approvals': return renderPendingApprovals()
+      case 'recent-activity': return renderRecentActivity()
+      case 'blog-notices': return <BlogNoticeManager />
       default: return renderDashboard()
     }
   }
 
   // ─── Main Render ──────────────────────────────────────────────────
   return (
-    <div className="flex h-screen bg-background">
+    <div className="flex h-screen bg-background" suppressHydrationWarning>
       {/* Sidebar Overlay (mobile) */}
       {sidebarOpen && (
         <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />
@@ -2138,13 +3461,24 @@ export default function AdminPage() {
         </nav>
 
         {/* Footer */}
-        <div className="p-3 border-t border-emerald-800/50">
+        <div className="p-3 border-t border-emerald-800/50 space-y-1">
           <Link href="/">
             <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-emerald-300 hover:bg-white/10 hover:text-white transition-colors">
               <ArrowLeft className="h-4 w-4" />
               <span>Back to Site</span>
             </button>
           </Link>
+          <button
+            onClick={async () => {
+              await fetch('/api/auth/logout', { method: 'POST' })
+              localStorage.removeItem('eduUser')
+              window.location.href = '/login'
+            }}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors"
+          >
+            <LogOut className="h-4 w-4" />
+            <span>Sign Out</span>
+          </button>
         </div>
       </aside>
 
@@ -2172,13 +3506,30 @@ export default function AdminPage() {
             </div>
 
             <div className="ml-auto flex items-center gap-2">
-              <Button size="icon" variant="ghost" className="relative">
+              <Button size="icon" variant="ghost" className="relative" onClick={() => setActiveView('pending-approvals')}>
                 <Bell className="h-5 w-5" />
-                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-emerald-500" />
+                {pendingCount > 0 && (
+                  <span className="absolute -top-1 -right-1 h-5 w-5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                    {pendingCount > 9 ? '9+' : pendingCount}
+                  </span>
+                )}
               </Button>
               <Avatar className="h-8 w-8">
                 <AvatarFallback className="bg-emerald-100 text-emerald-700 text-xs font-bold">AD</AvatarFallback>
               </Avatar>
+              <Button
+                size="icon"
+                variant="ghost"
+                title="Sign Out"
+                onClick={async () => {
+                  await fetch('/api/auth/logout', { method: 'POST' })
+                  localStorage.removeItem('eduUser')
+                  window.location.href = '/login'
+                }}
+                className="text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20"
+              >
+                <LogOut className="h-4 w-4" />
+              </Button>
             </div>
           </div>
         </header>
@@ -2186,7 +3537,7 @@ export default function AdminPage() {
         {/* Content Area */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">
           {/* Action Bar */}
-          {activeView !== 'dashboard' && activeView !== 'settings' && (
+          {activeView !== 'dashboard' && activeView !== 'settings' && activeView !== 'pending-approvals' && activeView !== 'recent-activity' && (
             <div className="flex items-center justify-between mb-4">
               <p className="text-sm text-muted-foreground">
                 Manage your {viewLabels[activeView]?.toLowerCase()}
@@ -2219,12 +3570,13 @@ export default function AdminPage() {
         chapter={chapterEditing}
         classes={classes}
         subjects={subjects}
-        onSaved={fetchChapters}
+        onSaved={handleChapterSaved}
       />
 
       {/* MCQ Editor Dialog */}
       <Dialog open={mcqEditorOpen} onOpenChange={setMcqEditorOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogTitle className="sr-only">MCQ Question Editor</DialogTitle>
           <McqEditor
             initialData={mcqEditing ? {
               question: mcqEditing.question,
@@ -2262,36 +3614,68 @@ export default function AdminPage() {
       {/* Creative Question Editor Dialog */}
       <Dialog open={cqEditorOpen} onOpenChange={setCqEditorOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogTitle className="sr-only">Creative Question Editor</DialogTitle>
           <CreativeEditor
-            initialData={cqEditing ? {
-              label: cqEditing.label,
-              question: cqEditing.question,
-              answer: cqEditing.answer || '',
-              marks: cqEditing.marks,
-              difficulty: cqEditing.difficulty,
-              year: (cqEditing as any).year || '',
-              board: (cqEditing as any).board || '',
-              schoolName: (cqEditing as any).schoolName || '',
-              board_name: cqEditing.board_name || '',
-              exam_year: cqEditing.exam_year ? String(cqEditing.exam_year) : '',
-              sourceType: cqEditing.sourceType || 'custom',
-              segmentK: (cqEditing as any).segmentK || '',
-              segmentKh: (cqEditing as any).segmentKh || '',
-              segmentG: (cqEditing as any).segmentG || '',
-              segmentGh: (cqEditing as any).segmentGh || '',
-              marksK: (cqEditing as any).marksK ?? 2,
-              marksKh: (cqEditing as any).marksKh ?? 3,
-              marksG: (cqEditing as any).marksG ?? 4,
-              marksGh: (cqEditing as any).marksGh ?? 4,
-              explanation: cqEditing.explanation || '',
-              tips: '',
-              videoUrl: (cqEditing as any).videoUrl || '',
-            } : undefined}
+            initialData={cqEditing ? (() => {
+              const segments = parseCqSegmentsFromItem(cqEditing as any)
+              return {
+                label: cqEditing.label,
+                question: cqEditing.question,
+                answer: cqEditing.answer || '',
+                marks: cqEditing.marks,
+                difficulty: cqEditing.difficulty,
+                year: (cqEditing as any).year || '',
+                board: (cqEditing as any).board || '',
+                schoolName: (cqEditing as any).schoolName || '',
+                board_name: cqEditing.board_name || '',
+                exam_year: cqEditing.exam_year ? String(cqEditing.exam_year) : '',
+                sourceType: cqEditing.sourceType || 'custom',
+                segmentK: segments.segmentK,
+                segmentKh: segments.segmentKh,
+                segmentG: segments.segmentG,
+                segmentGh: segments.segmentGh,
+                solutionK: (segments as any).solutionK || '',
+                solutionKh: (segments as any).solutionKh || '',
+                solutionG: (segments as any).solutionG || '',
+                solutionGh: (segments as any).solutionGh || '',
+                marksK: (cqEditing as any).marksK ?? 2,
+                marksKh: (cqEditing as any).marksKh ?? 3,
+                marksG: (cqEditing as any).marksG ?? 4,
+                marksGh: (cqEditing as any).marksGh ?? 4,
+                explanation: cqEditing.explanation || '',
+                tips: '',
+                videoUrl: (cqEditing as any).videoUrl || '',
+              }
+            })() : undefined}
             chapterId={cqEditing?.chapterId || filterChapterId || ''}
             onSave={handleCqSave}
             onDelete={cqEditing?.id ? handleCqDelete : undefined}
             onCancel={() => { setCqEditorOpen(false); setCqEditing(null) }}
             isSaving={cqSaving}
+          />
+        </DialogContent>
+      </Dialog>
+
+      {/* Main Book Q&A (Explanation) Editor Dialog */}
+      <Dialog open={explanationEditorOpen} onOpenChange={setExplanationEditorOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogTitle className="sr-only">Main Book Q&A Editor</DialogTitle>
+          <ExplanationEditor
+            initialData={explanationEditing ? {
+              type: (explanationEditing as any).type || 'single',
+              question: explanationEditing.question,
+              solution: explanationEditing.solution || '',
+              videoUrl: explanationEditing.videoUrl || '',
+              difficulty: explanationEditing.difficulty || 'medium',
+              order: explanationEditing.order,
+              isActive: explanationEditing.isActive !== false,
+              subQuestions: (explanationEditing as any).subQuestions || '[]',
+            } : undefined}
+            chapterId={explanationEditing?.chapterId || filterChapterId || ''}
+            onSave={handleExplanationSave}
+            onDelete={explanationEditing?.id ? handleExplanationDelete : undefined}
+            onCancel={() => { setExplanationEditorOpen(false); setExplanationEditing(null) }}
+            isSaving={explanationSaving}
           />
         </DialogContent>
       </Dialog>

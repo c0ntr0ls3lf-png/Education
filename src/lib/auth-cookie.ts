@@ -5,6 +5,10 @@
  * Node.js runtime (API routes) and Edge Runtime (middleware).
  */
 
+if (process.env.NODE_ENV === 'production' && !process.env.AUTH_SECRET) {
+  console.error('CRITICAL SECURITY ERROR: AUTH_SECRET is not set in production environment!');
+}
+
 const SECRET = process.env.AUTH_SECRET || 'edulms_default_secret_change_in_production';
 
 interface AuthTokenPayload {

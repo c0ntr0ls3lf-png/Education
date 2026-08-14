@@ -1,12 +1,10 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { Search, X } from 'lucide-react'
+import { Search, X, BookOpen, ArrowRight, GraduationCap } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import Link from 'next/link'
-import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { BookOpen, ArrowRight, GraduationCap } from 'lucide-react'
 
 interface ClassItem {
   id: string
@@ -41,14 +39,14 @@ export default function ClassSearchClient({ classes }: ClassSearchClientProps) {
   return (
     <>
       {/* Search Bar */}
-      <div className="relative max-w-xl mx-auto mb-8">
+      <div className="relative max-w-xl mb-8">
         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
           type="text"
           placeholder="Search by class name, number, or subject..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="pl-10 pr-10 h-12 text-base rounded-xl border-emerald-200 dark:border-emerald-800 focus-visible:ring-emerald-500/30 focus-visible:border-emerald-400"
+          className="pl-10 pr-10 h-12 text-base rounded-xl border-gray-200 dark:border-gray-800 focus-visible:ring-emerald-500/30 focus-visible:border-emerald-400"
         />
         {search && (
           <button
@@ -62,43 +60,57 @@ export default function ClassSearchClient({ classes }: ClassSearchClientProps) {
 
       {/* Results count */}
       {search.trim() && (
-        <p className="text-sm text-muted-foreground mb-4 text-center">
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
           Showing {filteredClasses.length} of {classes.length} classes
         </p>
       )}
 
-      {/* Class Grid */}
+      {/* Class Grid — matches Class > Subject card layout */}
       {filteredClasses.length === 0 ? (
         <div className="text-center py-16">
-          <Search className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
-          <h3 className="text-lg font-medium text-muted-foreground">No classes found</h3>
-          <p className="text-sm text-muted-foreground/70 mt-1">Try a different search term.</p>
+          <GraduationCap className="h-12 w-12 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
+          <h3 className="text-lg font-medium text-gray-500">No classes found</h3>
+          <p className="text-sm text-gray-400 mt-1">Try a different search term.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
           {filteredClasses.map((cls) => (
             <Link key={cls.id} href={`/class/${cls.slug}`}>
-              <Card className="group relative overflow-hidden border-0 shadow-md hover:shadow-xl transition-all duration-300 hover:-translate-y-1 h-full">
-                <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-emerald-500 to-teal-500" />
-                <CardContent className="p-5 sm:p-6 flex flex-col items-center text-center">
-                  <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/40 dark:to-teal-950/40 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform duration-300">
-                    <span className="text-2xl sm:text-3xl font-bold text-emerald-600 dark:text-emerald-400">
-                      {cls.number}
-                    </span>
+              <div className="group relative overflow-hidden rounded-xl shadow-md hover:shadow-xl transition-all duration-300 hover:scale-[1.02] bg-white dark:bg-gray-900 h-full">
+                {/* Gradient Header */}
+                <div className="bg-gradient-to-r from-emerald-500 to-teal-600 px-5 py-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-lg bg-white/20 flex items-center justify-center">
+                      <GraduationCap className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-white text-lg leading-tight">
+                        {cls.name}
+                      </h3>
+                      <p className="text-white/80 text-sm mt-0.5">
+                        {cls.subjects?.length || 0} Subjects
+                      </p>
+                    </div>
                   </div>
-                  <h3 className="font-semibold text-base sm:text-lg mb-1 text-foreground">{cls.name}</h3>
-                  <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2 mb-3">
-                    {cls.description || `${cls.subjects?.length || 0} subjects to explore`}
+                  <ArrowRight className="h-5 w-5 text-white/60 group-hover:text-white group-hover:translate-x-1 transition-all" />
+                </div>
+
+                {/* White Content Area */}
+                <div className="px-5 py-4">
+                  <p className="text-gray-500 dark:text-gray-400 text-sm leading-relaxed mb-3">
+                    {cls.description || `Explore ${cls.name} subjects, chapters, and study materials`}
                   </p>
-                  <Badge variant="outline" className="text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 text-xs">
-                    <BookOpen className="mr-1 h-3 w-3" />
-                    {cls.subjects?.length || 0} Subjects
-                  </Badge>
-                  <div className="mt-3 flex items-center text-emerald-600 dark:text-emerald-400 text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    Explore <ArrowRight className="ml-1 h-3 w-3" />
+                  <div className="flex items-center gap-4 text-xs">
+                    <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
+                      <BookOpen className="h-3.5 w-3.5" />
+                      {cls.subjects?.length || 0} Subjects
+                    </span>
+                    <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 border-0 text-xs px-2 py-0.5 hover:bg-orange-100">
+                      Free
+                    </Badge>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             </Link>
           ))}
         </div>

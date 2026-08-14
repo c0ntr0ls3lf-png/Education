@@ -62,7 +62,7 @@ interface LeaderboardEntry {
   name: string
   score: number
   rank: number
-  image?: string
+  image?: string | null
 }
 
 const DEMO_USER_ID = 'demo-user'
@@ -203,7 +203,7 @@ export default function ProfilePage() {
       <CardContent className="relative pt-0 pb-4 px-6">
         <div className="flex flex-col sm:flex-row items-start sm:items-end gap-4 -mt-10">
           <Avatar className="h-20 w-20 border-4 border-background shadow-lg">
-            <AvatarImage src={profileImage || savedImage} />
+            <AvatarImage src={profileImage || savedImage || undefined} />
             <AvatarFallback className="bg-emerald-100 text-emerald-700 text-2xl font-bold">
               {profileData.name.split(' ').map(n => n[0]).join('')}
             </AvatarFallback>
@@ -559,7 +559,7 @@ export default function ProfilePage() {
                       )}
                     </div>
                     <Avatar className="h-8 w-8">
-                      <AvatarImage src={entry.image} />
+                      <AvatarImage src={entry.image || undefined} />
                       <AvatarFallback className={`text-xs font-bold ${
                         isCurrentUser ? 'bg-emerald-100 text-emerald-700' : 'bg-muted text-muted-foreground'
                       }`}>
@@ -640,7 +640,7 @@ export default function ProfilePage() {
                   className="relative group"
                 >
                   <Avatar className="h-24 w-24 cursor-pointer ring-2 ring-transparent hover:ring-emerald-400 transition-all">
-                    <AvatarImage src={profileImage || savedImage} />
+                    <AvatarImage src={profileImage || savedImage || undefined} />
                     <AvatarFallback className="bg-emerald-100 text-emerald-700 text-2xl font-bold">
                       {profileData.name.split(' ').map(n => n[0]).join('')}
                     </AvatarFallback>

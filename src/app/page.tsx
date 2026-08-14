@@ -2,18 +2,20 @@ import Link from 'next/link'
 import {
   BookOpen,
   GraduationCap,
-  ClipboardCheck,
-  Users,
-  Sparkles,
   CheckCircle2,
-  Clock,
+  ClipboardCheck,
   Zap,
   FileText,
-  Award,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { connectDB, Class, Subject, BlogPost as BlogPostModel, Notice as NoticeModel, toDoc } from '@/lib/db'
+import HomeClient from '@/components/home/HomeClient'
+import BlogNoticeSection from '@/components/home/BlogNoticeSection'
+
+// Enable ISR (revalidate every 30 minutes)
+export const revalidate = 1800
 
 // ─── Data Types ──────────────────────────────────────────────
 interface ClassItem {
@@ -24,50 +26,159 @@ interface ClassItem {
   description?: string
   icon?: string
   color?: string
+  categoryId?: string | null
+  subcategoryId?: string | null
   subjects: Array<{ id: string; name: string }>
 }
 
-// ─── Server Data Fetching ────────────────────────────────────
-async function safeJson<T>(response: PromiseSettledResult<Response>): Promise<T | null> {
-  if (response.status === 'fulfilled' && response.value.ok) {
-    try {
-      return (await response.value.json()) as T
-    } catch {
-      return null
+interface BlogPostItem {
+  id: string
+  title: string
+  slug: string
+  content: string
+  coverImage?: string | null
+  category?: string | null
+  createdAt: string
+}
+
+interface NoticeItem {
+  id: string
+  title: string
+  content: string
+  category: string
+  isImportant: boolean
+  createdAt: string
+}
+
+// ─── Auto Sync Notices (Runs in background, throttled to once per hour) ───
+async function syncNoticesIfNeeded() {
+  try {
+    const latestNotice = await NoticeModel.findOne().sort({ createdAt: -1 }).select('createdAt').lean()
+    const oneHour = 60 * 60 * 1000
+
+    if (!latestNotice || (Date.now() - new Date(latestNotice.createdAt).getTime() > oneHour)) {
+      console.log('🔄 Triggering automatic Bangladesh education notice sync...')
+      const Parser = require('rss-parser')
+      const parser = new Parser()
+      const feed = await parser.parseURL('https://www.prothomalo.com/stories.rss')
+
+      const isEducationNotice = (item: any) => {
+        const link = (item.link || '').toLowerCase()
+        const title = (item.title || '').toLowerCase()
+        const categories = (item.categories || []).map((c: string) => c.toLowerCase())
+
+        const hasEduKeyword = 
+          link.includes('/education/') ||
+          link.includes('/chakri/') ||
+          categories.includes('education') ||
+          categories.includes('শিক্ষা') ||
+          categories.includes('পরীক্ষা') ||
+          categories.includes('ভর্তি') ||
+          categories.includes('শিক্ষাপ্রতিষ্ঠান') ||
+          title.includes('শিক্ষা') ||
+          title.includes('পরীক্ষা') ||
+          title.includes('ভর্তি') ||
+          title.includes('এইচএসসি') ||
+          title.includes('এসএসসি') ||
+          title.includes('পরীক্ষার্থী') ||
+          title.includes('শিক্ষার্থী') ||
+          title.includes('বৃত্তি') ||
+          title.includes('বিশ্ববিদ্যালয়')
+
+        const isExcluded = 
+          link.includes('/sports/') || 
+          link.includes('/lifestyle/') || 
+          link.includes('/politics/') || 
+          link.includes('/entertainment/') || 
+          link.includes('/world/') ||
+          categories.includes('রাজনীতি') ||
+          categories.includes('ফুটবল') ||
+          categories.includes('খেলা') ||
+          categories.includes('বিনোদন')
+
+        return hasEduKeyword && !isExcluded
+      }
+
+      const filteredItems = feed.items.filter(isEducationNotice)
+      const itemsToProcess = filteredItems.slice(0, 8)
+
+      for (const item of itemsToProcess) {
+        if (!item.title) continue
+        const existing = await NoticeModel.findOne({ title: item.title.trim() })
+        if (existing) continue
+
+        const title = item.title.trim()
+        const baseSlug = title
+          .toLowerCase()
+          .replace(/[^a-z0-9\u0980-\u09ff]+/g, '-')
+          .replace(/(^-|-$)/g, '')
+        const slug = `${baseSlug || 'notice'}-${Date.now().toString().slice(-4)}`
+        const rawContent = item.content || item.contentSnippet || ''
+        const content = `<p>${rawContent.replace(/<[^>]*>/g, ' ').substring(0, 500).trim()}...</p>`
+
+        // Category Classification
+        const text = `${title} ${rawContent}`.toLowerCase()
+        let category: 'academic' | 'exam' | 'admission' | 'general' = 'general'
+        if (text.includes('ভর্তি') || text.includes('admission') || text.includes('ভর্তি পরীক্ষা')) {
+          category = 'admission'
+        } else if (text.includes('পরীক্ষা') || text.includes('exam') || text.includes('রুটিন') || text.includes('fresult') || text.includes('hsc') || text.includes('ssc')) {
+          category = 'exam'
+        } else if (text.includes('ক্লাস') || text.includes('সিলেবাস') || text.includes('পাঠ্যপুস্তক') || text.includes('শিক্ষাবর্ষ') || text.includes('ছুটি') || text.includes('শিক্ষাপ্রতিষ্ঠান')) {
+          category = 'academic'
+        }
+
+        const isImportant = title.includes('ভর্তি') || title.includes('ফলাফল') || title.includes('রুটিন') || title.includes('আহ্বান')
+
+        await NoticeModel.create({
+          title,
+          slug,
+          content,
+          category,
+          isImportant,
+          isActive: true,
+          createdAt: new Date(item.pubDate || new Date()),
+        })
+      }
+      console.log('✅ Automatic notice sync completed successfully.')
     }
+  } catch (err: any) {
+    console.error('Error during auto notice sync:', err.message)
   }
-  return null
 }
 
+// ─── Server Data Fetching (direct DB query — no internal HTTP) ─
 async function fetchData() {
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || (process.env.PORT ? `http://localhost:${process.env.PORT}` : 'http://localhost:3001')
+  try {
+    await connectDB()
 
-  const classesRes = await Promise.allSettled([
-    fetch(new URL('/api/classes?include=subjects', baseUrl), { next: { revalidate: 0 } }),
-  ])
+    const classes = await Class.find({ isActive: true }).sort({ number: 1 }).lean()
+    const subjects = await Subject.find({ isActive: true }).sort({ order: 1 }).lean()
+    const blogPosts = await BlogPostModel.find({ isActive: true }).sort({ createdAt: -1 }).limit(6).lean()
+    const notices = await NoticeModel.find({ isActive: true }).sort({ isImportant: -1, createdAt: -1 }).limit(10).lean()
 
-  const classesData = await safeJson<ClassItem[]>(classesRes[0])
+    // Group subjects by classId
+    const subjectsByClass = new Map<string, typeof subjects>()
+    for (const s of subjects) {
+      const key = String(s.classId)
+      if (!subjectsByClass.has(key)) subjectsByClass.set(key, [])
+      subjectsByClass.get(key)!.push(s)
+    }
 
-  return {
-    classes: Array.isArray(classesData) ? classesData : [],
+    const result = classes.map(cls => ({
+      ...cls,
+      subjects: subjectsByClass.get(String(cls._id)) || [],
+    }))
+
+    return {
+      classes: toDoc<ClassItem[]>(result),
+      blogPosts: toDoc<BlogPostItem[]>(blogPosts),
+      notices: toDoc<NoticeItem[]>(notices),
+    }
+  } catch (err) {
+    console.error('fetchData error:', err)
+    return { classes: [], blogPosts: [], notices: [] }
   }
 }
-
-// ─── Class Card Colors ───────────────────────────────────────
-const classColors = [
-  'from-emerald-500 to-emerald-600',
-  'from-teal-500 to-teal-600',
-  'from-cyan-500 to-cyan-600',
-  'from-sky-500 to-sky-600',
-  'from-amber-500 to-amber-600',
-  'from-orange-500 to-orange-600',
-  'from-rose-500 to-rose-600',
-  'from-pink-500 to-pink-600',
-  'from-violet-500 to-violet-600',
-  'from-purple-500 to-purple-600',
-  'from-indigo-500 to-indigo-600',
-  'from-lime-500 to-lime-600',
-]
 
 // ─── Page Component ──────────────────────────────────────────
 export default async function HomePage() {
@@ -125,19 +236,19 @@ export default async function HomePage() {
                 {/* Decorative animated floating shapes with letters */}
                 <div
                   className="absolute -top-3 -right-3 w-16 h-16 bg-emerald-500 rounded-lg opacity-20 animate-float-rotate pointer-events-none flex items-center justify-center"
-                  style={{ '--r': '12deg' as any, animationDelay: '0s' as any }}
+                  style={{ '--r': '12deg', animationDelay: '0s' } as React.CSSProperties}
                 >
                   <span className="text-white font-bold text-2xl">a</span>
                 </div>
                 <div
                   className="absolute -bottom-3 -left-3 w-16 h-16 bg-emerald-500 rounded-lg opacity-20 animate-float-rotate pointer-events-none flex items-center justify-center"
-                  style={{ '--r': '-15deg' as any, animationDelay: '1.5s' as any }}
+                  style={{ '--r': '-15deg', animationDelay: '1.5s' } as React.CSSProperties}
                 >
                   <span className="text-white font-bold text-2xl">b</span>
                 </div>
                 <div
                   className="absolute -bottom-3 -right-3 w-16 h-16 bg-emerald-500 rounded-lg opacity-20 animate-float-rotate pointer-events-none flex items-center justify-center"
-                  style={{ '--r': '8deg' as any, animationDelay: '3s' as any }}
+                  style={{ '--r': '8deg', animationDelay: '3s' } as React.CSSProperties}
                 >
                   <span className="text-white font-bold text-2xl">c</span>
                 </div>
@@ -199,44 +310,11 @@ export default async function HomePage() {
             </p>
           </div>
 
-          {data.classes.length > 0 ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-5">
-              {data.classes.map((cls, index) => (
-                <Link key={cls.id} href={`/class/${cls.slug}`}>
-                  <div className={`group relative overflow-hidden rounded-xl bg-gradient-to-br ${classColors[index % classColors.length]} p-5 sm:p-6 cursor-pointer transition-all duration-300 hover:scale-[1.03] hover:shadow-xl hover:shadow-black/10`}>
-                    {/* Decorative circle */}
-                    <div className="absolute -top-6 -right-6 w-20 h-20 bg-white/10 rounded-full" />
-                    <div className="absolute -bottom-4 -left-4 w-16 h-16 bg-white/5 rounded-full" />
-
-                    <div className="relative">
-                      <p className="text-4xl sm:text-5xl font-extrabold text-white mb-1">{cls.number}</p>
-                      <p className="text-white/90 font-semibold text-base sm:text-lg">Class {cls.number}</p>
-                      <div className="mt-3 flex items-center justify-between">
-                        <span className="text-white/70 text-xs sm:text-sm">{cls.subjects?.length || 0} Subjects</span>
-                        <Badge className="bg-white/20 text-white border-0 text-xs hover:bg-white/30">
-                          Free
-                        </Badge>
-                      </div>
-                    </div>
-                  </div>
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-16">
-              <GraduationCap className="h-16 w-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
-              <p className="text-gray-500 dark:text-gray-400 text-lg">No classes available yet. Check back soon!</p>
-              <Link href="/api/seed">
-                <Button className="mt-4 bg-emerald-600 hover:bg-emerald-700 text-white">
-                  Seed Database
-                </Button>
-              </Link>
-            </div>
-          )}
+          <HomeClient classes={data.classes} />
         </div>
       </section>
 
-      {/* ═══════════ FEATURES SECTION ═══════════ */}
+      {/* ═══════════ BLOG + NOTICE BOARD SECTION ═══════════ */}
       <section className="py-16 sm:py-20 bg-white dark:bg-gray-950">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-10 sm:mb-14">
@@ -244,64 +322,14 @@ export default async function HomePage() {
               Everything You Need to Excel
             </h2>
             <p className="text-gray-500 dark:text-gray-400 text-base sm:text-lg max-w-xl mx-auto">
-              Powerful tools designed to help students learn more effectively
+              Latest articles, study tips, and important notices — all in one place
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[
-              {
-                icon: BookOpen,
-                title: 'Comprehensive Content',
-                description: 'Detailed explanations, chapter notes, and study materials for all subjects from Class 1 to 12.',
-                color: 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400',
-              },
-              {
-                icon: ClipboardCheck,
-                title: 'Interactive Exams',
-                description: 'MCQ exams with per-question timer and Creative exams with auto-save. Instant results and analysis.',
-                color: 'bg-teal-50 dark:bg-teal-950/30 text-teal-600 dark:text-teal-400',
-              },
-              {
-                icon: Award,
-                title: 'Progress Tracking',
-                description: 'Track your scores, review answers, see detailed analytics, and earn achievements as you learn.',
-                color: 'bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400',
-              },
-              {
-                icon: Clock,
-                title: 'Study Anytime',
-                description: 'Access all content 24/7. Study at your own pace with no time restrictions or deadlines.',
-                color: 'bg-sky-50 dark:bg-sky-950/30 text-sky-600 dark:text-sky-400',
-              },
-              {
-                icon: Users,
-                title: 'Free for Everyone',
-                description: 'No sign-up required to access content. All educational materials are completely free for all students.',
-                color: 'bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400',
-              },
-              {
-                icon: Sparkles,
-                title: 'Math Rendering',
-                description: 'Beautiful KaTeX-powered math rendering with live preview. Perfect formulas every time.',
-                color: 'bg-violet-50 dark:bg-violet-950/30 text-violet-600 dark:text-violet-400',
-              },
-            ].map((feature) => (
-              <Card key={feature.title} className="group border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-md transition-all duration-300 hover:-translate-y-0.5">
-                <CardContent className="p-6">
-                  <div className={`inline-flex p-3 rounded-xl ${feature.color} mb-4`}>
-                    <feature.icon className="h-6 w-6" />
-                  </div>
-                  <h3 className="font-bold text-gray-900 dark:text-white text-lg mb-2 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
-                    {feature.title}
-                  </h3>
-                  <p className="text-gray-500 dark:text-gray-400 text-sm leading-relaxed">
-                    {feature.description}
-                  </p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+          <BlogNoticeSection
+            posts={data.blogPosts ?? []}
+            notices={data.notices ?? []}
+          />
         </div>
       </section>
 

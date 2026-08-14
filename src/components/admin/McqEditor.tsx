@@ -12,6 +12,7 @@ import {
 import QuestionEditor from './QuestionEditor'
 import MetadataFields from './MetadataFields'
 import ExplanationAccordion from './ExplanationAccordion'
+import { htmlToPlainText } from '@/lib/html-utils'
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ export interface McqFormData {
   tips: string
   videoUrl: string
   // Other
-  marks: number
+  marks: number | ''
   difficulty: string
 }
 
@@ -91,16 +92,38 @@ export default function McqEditor({
 
   const handleSave = () => {
     const finalForm = { ...form };
-    // Map metadata fields to legacy fields for compatibility
+    finalForm.marks = form.marks === '' ? 1 : (parseInt(form.marks as any) || 1);
     finalForm.board = form.board_name;
     finalForm.year = form.exam_year;
+
     if (form.mcqType === 'stem_based') {
       finalForm.subMcqs = JSON.stringify(subMcqList);
+      if (!htmlToPlainText(finalForm.question)) {
+        finalForm.question = finalForm.stem || 'Stem-based question';
+      }
     }
     if (form.mcqType === 'multiple_statement') {
       finalForm.statements = JSON.stringify(stmtList);
+      if (!finalForm.correctCombination) {
+        alert('Please select a correct combination for the multiple statement question');
+        return;
+      }
     }
-    onSave(finalForm);
+
+    const questionText = htmlToPlainText(finalForm.question)
+      || (form.mcqType === 'stem_based' ? htmlToPlainText(finalForm.stem) : '');
+
+    if (!questionText) {
+      alert('Question is required');
+      return;
+    }
+
+    if (form.mcqType === 'single' && !finalForm.correctAnswer) {
+      alert('Please select the correct answer');
+      return;
+    }
+
+    onSave(finalForm as any);
   }
 
   // ─── Sub-MCQ helpers ───────────────────────────────────────────────────
@@ -386,8 +409,11 @@ export default function McqEditor({
           <Input
             type="number"
             className="h-9 text-sm"
-            value={form.marks}
-            onChange={(e) => set('marks', parseInt(e.target.value) || 1)}
+            value={form.marks ?? ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              set('marks', val === '' ? '' : parseInt(val) || 1);
+            }}
           />
         </div>
         <div className="space-y-1.5">

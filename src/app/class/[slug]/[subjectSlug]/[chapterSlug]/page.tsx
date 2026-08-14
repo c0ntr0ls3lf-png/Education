@@ -1,10 +1,76 @@
 import { notFound } from 'next/navigation'
-import { BookOpen, Lightbulb, CheckSquare, ListChecks, FileQuestion } from 'lucide-react'
+import {
+  BookOpen,
+  Atom,
+  Calculator,
+  FlaskConical,
+  Globe,
+  Languages,
+  Microscope,
+  Monitor,
+  Leaf,
+  type LucideIcon,
+} from 'lucide-react'
 import { Breadcrumbs } from '@/components/shared/Breadcrumbs'
 import { AdBanner } from '@/components/shared/AdBanner'
-import { Badge } from '@/components/ui/badge'
 import ChapterContentClient from './ChapterContentClient'
 import ChapterNotesWidget from '@/components/content/ChapterNotesWidget'
+import { connectDB, waitForSeed, Class, Subject, Chapter, Explanation, CreativeQuestion, McqQuestion, toDoc } from '@/lib/db'
+
+const subjectGradientMap: Record<string, string> = {
+  physics: 'from-indigo-500 to-purple-600',
+  math: 'from-emerald-500 to-teal-600',
+  mathematics: 'from-emerald-500 to-teal-600',
+  chemistry: 'from-orange-500 to-red-500',
+  geography: 'from-green-500 to-emerald-600',
+  english: 'from-rose-500 to-pink-600',
+  biology: 'from-teal-500 to-cyan-600',
+  ict: 'from-slate-500 to-gray-600',
+  computer: 'from-slate-500 to-gray-600',
+  science: 'from-lime-500 to-green-600',
+  bangla: 'from-amber-500 to-orange-600',
+  bengali: 'from-amber-500 to-orange-600',
+  history: 'from-yellow-500 to-amber-600',
+  social: 'from-violet-500 to-purple-600',
+  hindi: 'from-amber-500 to-orange-600',
+  evs: 'from-cyan-500 to-sky-600',
+}
+
+const subjectIconMap: Record<string, LucideIcon> = {
+  physics: Atom,
+  math: Calculator,
+  mathematics: Calculator,
+  chemistry: FlaskConical,
+  geography: Globe,
+  english: Languages,
+  biology: Microscope,
+  ict: Monitor,
+  computer: Monitor,
+  science: Microscope,
+  botany: Leaf,
+  zoology: Leaf,
+}
+
+function getSubjectGradient(slug: string): string {
+  const key = slug.toLowerCase()
+  for (const [pattern, gradient] of Object.entries(subjectGradientMap)) {
+    if (key.includes(pattern)) return gradient
+  }
+  return 'from-emerald-500 to-teal-600'
+}
+
+function getSubjectIcon(slug: string): LucideIcon {
+  const key = slug.toLowerCase()
+  for (const [pattern, icon] of Object.entries(subjectIconMap)) {
+    if (key.includes(pattern)) return icon
+  }
+  return BookOpen
+}
+
+function renderSubjectIcon(slug: string, className: string) {
+  const IconComponent = getSubjectIcon(slug)
+  return <IconComponent className={className} />
+}
 
 /** Safely extract readable text from description (handles JSON Q&A entries + HTML) */
 function getDescriptionSummary(desc: string | null | undefined, fallback: string): string {
@@ -48,17 +114,45 @@ function parseMainBookEntries(desc: string | null | undefined): { question: stri
   if (!desc || !desc.trim()) return []
   try {
     const parsed = JSON.parse(desc)
-    if (Array.isArray(parsed)) return parsed
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    let rawEntries: any[] = []
+    if (Array.isArray(parsed)) {
+      rawEntries = parsed
+    } else if (parsed && typeof parsed === 'object') {
       if (parsed.questions && Array.isArray(parsed.questions)) {
-        return parsed.questions
+        rawEntries = parsed.questions
+      } else {
+        // Handle corrupted format: {"0": {...}, "1": {...}, chapterType: "main_book", ...}
+        rawEntries = Object.entries(parsed)
+          .filter(([key, val]) => /^\d+$/.test(key) && val && typeof val === 'object')
+          .map(([_, val]) => val)
       }
-      // Handle corrupted format: {"0": {...}, "1": {...}, chapterType: "main_book", ...}
-      const numericEntries = Object.entries(parsed)
-        .filter(([key, val]) => /^\d+$/.test(key) && val && typeof val === 'object')
-        .map(([_, val]) => val) as { question: string; videoUrl: string; solution: string }[]
-      if (numericEntries.length > 0) return numericEntries
     }
+
+    const flatEntries: { question: string; videoUrl: string; solution: string }[] = []
+    rawEntries.forEach((entry) => {
+      if (entry.type === 'group' && Array.isArray(entry.subQuestions)) {
+        entry.subQuestions.forEach((sub: any) => {
+          const labelPrefix = sub.label ? `<strong>${sub.label})</strong> ` : ''
+          const parentHeading = entry.question 
+            ? `<div class="text-xs text-muted-foreground/80 font-medium mb-1 border-b border-muted pb-1">${entry.question}</div>` 
+            : ''
+          const combinedQuestion = `${parentHeading}<div>${labelPrefix}${sub.question}</div>`
+          
+          flatEntries.push({
+            question: combinedQuestion,
+            solution: sub.solution || '',
+            videoUrl: sub.videoUrl || '',
+          })
+        })
+      } else {
+        flatEntries.push({
+          question: entry.question || '',
+          solution: entry.solution || '',
+          videoUrl: entry.videoUrl || '',
+        })
+      }
+    })
+    return flatEntries
   } catch { /* not JSON */ }
   return []
 }
@@ -119,6 +213,9 @@ interface ChapterData {
   mcqQuestions: McqQuestion[]
   totalCqCount?: number
   totalMcqCount?: number
+  mainBookPdfUrl?: string | null
+  mcqPdfUrl?: string | null
+  cqPdfUrl?: string | null
   subject: {
     id: string
     name: string
@@ -136,65 +233,159 @@ async function fetchChapterData(
   year?: string
 ): Promise<{ chapter: ChapterData; classData: { id: string; name: string; slug: string }; subjectData: { id: string; name: string; slug: string } } | null> {
   try {
+    await connectDB()
+
     const decodedClassSlug = decodeURIComponent(classSlug)
     const decodedSubjectSlug = decodeURIComponent(subjectSlug)
     const decodedChapterSlug = decodeURIComponent(chapterSlug)
 
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 
-      (process.env.PORT ? `http://localhost:${process.env.PORT}` : 'http://localhost:3001')
+    // Find class by slug (only needed fields)
+    const cls = await Class.findOne({ slug: decodedClassSlug, isActive: true })
+      .select('_id name slug')
+      .lean()
+    if (!cls) return null
 
-    // Find class by slug
-    const classRes = await fetch(new URL('/api/classes?include=subjects', baseUrl), {
-      next: { revalidate: 0 },
-    })
-    if (!classRes.ok) return null
-    const classes = await classRes.json()
-    if (!Array.isArray(classes)) return null
-
-    const classData = classes.find((c: { slug: string }) => c.slug === decodedClassSlug)
-    if (!classData) return null
-
-    // Find subject by slug
-    const subject = classData.subjects?.find((s: { slug: string }) => s.slug === decodedSubjectSlug)
+    // Find subject by slug (only needed fields)
+    const subject = await Subject.findOne({ classId: String(cls._id), slug: decodedSubjectSlug, isActive: true })
+      .select('_id name slug')
+      .lean()
     if (!subject) return null
 
-    // Fetch chapters for this subject and find by slug
-    const chaptersRes = await fetch(
-      new URL(`/api/chapters?subjectId=${subject.id}`, baseUrl),
-      { next: { revalidate: 0 } }
-    )
-    if (!chaptersRes.ok) return null
-    const chapters = await chaptersRes.json()
-    if (!Array.isArray(chapters)) return null
-
-    const chapter = chapters.find((ch: { slug: string }) => ch.slug === decodedChapterSlug)
+    // Find chapter by slug (only needed fields)
+    const chapter = await Chapter.findOne({ subjectId: String(subject._id), slug: decodedChapterSlug, isActive: true })
+      .select('_id name slug subjectId description sidebarContent mainBookPdfUrl mcqPdfUrl cqPdfUrl')
+      .lean()
     if (!chapter) return null
 
-    // Fetch chapter content
-    const contentUrl = new URL(`/api/chapters/${chapter.id}?include=content`, baseUrl)
-    if (board) contentUrl.searchParams.set('board', board)
-    if (year) contentUrl.searchParams.set('year', year)
+    const id = String(chapter._id)
+    const currentYear = new Date().getFullYear();
 
-    const contentRes = await fetch(
-      contentUrl,
-      { next: { revalidate: 0 } }
-    )
-    if (!contentRes.ok) return null
-    const chapterWithContent = await contentRes.json()
+    const matchCq: Record<string, any> = { chapterId: id };
+    if (board && board !== 'all') {
+      matchCq.board_name = { $regex: new RegExp('^' + board.replace(/-/g, ' ') + '$', 'i') };
+    }
+    if (year && year !== 'all') {
+      const parsedYear = parseInt(year, 10);
+      if (!isNaN(parsedYear)) {
+        matchCq.exam_year = parsedYear;
+      }
+    }
 
-    return {
-      chapter: {
-        ...chapterWithContent,
-        subject: {
-          id: subject.id,
-          name: subject.name,
-          slug: subject.slug,
-          class: { id: classData.id, name: classData.name, slug: classData.slug },
+    const matchMcq: Record<string, any> = { chapterId: id };
+    if (board && board !== 'all') {
+      matchMcq.board_name = { $regex: new RegExp('^' + board.replace(/-/g, ' ') + '$', 'i') };
+    }
+    if (year && year !== 'all') {
+      const parsedYear = parseInt(year, 10);
+      if (!isNaN(parsedYear)) {
+        matchMcq.exam_year = parsedYear;
+      }
+    }
+
+    const cqPipeline: Record<string, unknown>[] = [
+      { $match: matchCq },
+      {
+        $addFields: {
+          sortPriority: {
+            $switch: {
+              branches: [
+                { case: { $and: [ { $eq: ['$sourceType', 'board'] }, { $eq: ['$exam_year', currentYear] } ] }, then: 1 },
+                { case: { $eq: ['$sourceType', 'board'] }, then: 2 },
+                { case: { $eq: ['$sourceType', 'school'] }, then: 3 },
+                { case: { $eq: ['$sourceType', 'model_test'] }, then: 4 },
+              ],
+              default: 5,
+            },
+          },
         },
       },
-      classData: { id: classData.id, name: classData.name, slug: classData.slug },
-      subjectData: { id: subject.id, name: subject.name, slug: subject.slug },
+      { $sort: { sortPriority: 1, exam_year: -1, order: 1, label: 1 } },
+      { $project: { sortPriority: 0 } },
+    ];
+    const mcqPipeline: Record<string, unknown>[] = [
+      { $match: matchMcq },
+      {
+        $addFields: {
+          sortPriority: {
+            $switch: {
+              branches: [
+                { case: { $and: [ { $eq: ['$sourceType', 'board'] }, { $eq: ['$exam_year', currentYear] } ] }, then: 1 },
+                { case: { $eq: ['$sourceType', 'board'] }, then: 2 },
+                { case: { $eq: ['$sourceType', 'school'] }, then: 3 },
+                { case: { $eq: ['$sourceType', 'model_test'] }, then: 4 },
+              ],
+              default: 5,
+            },
+          },
+        },
+      },
+      { $sort: { sortPriority: 1, exam_year: -1, order: 1 } },
+      { $project: { sortPriority: 0 } },
+    ];
+
+    const [explanations, cqs, mcqs, totalCqCount, totalMcqCount] = await Promise.all([
+      Explanation.find({ chapterId: id }).sort({ order: 1 }).lean(),
+      CreativeQuestion.aggregate(cqPipeline as any),
+      McqQuestion.aggregate(mcqPipeline as any),
+      CreativeQuestion.countDocuments({ chapterId: id }),
+      McqQuestion.countDocuments({ chapterId: id })
+    ]);
+
+    const classData = {
+      id: String(cls._id),
+      name: cls.name,
+      slug: cls.slug
     }
+
+    const subjectData = {
+      id: String(subject._id),
+      name: subject.name,
+      slug: subject.slug
+    }
+
+    const chapterWithContent = {
+      ...chapter,
+      explanations,
+      creativeQuestions: cqs,
+      mcqQuestions: mcqs,
+      totalCqCount,
+      totalMcqCount,
+      subject: {
+        ...subjectData,
+        class: classData
+      }
+    }
+
+    return toDoc<{ chapter: ChapterData; classData: { id: string; name: string; slug: string }; subjectData: { id: string; name: string; slug: string } }>({
+      chapter: chapterWithContent,
+      classData,
+      subjectData
+    })
+  } catch (err) {
+    console.error('fetchChapterData direct DB error:', err)
+    return null
+  }
+}
+
+// ─── Lightweight fetch just for metadata (no question data) ─────────
+async function fetchChapterMeta(
+  classSlug: string,
+  subjectSlug: string,
+  chapterSlug: string,
+): Promise<{ chapterName: string; subjectName: string; description?: string | null } | null> {
+  try {
+    await connectDB()
+    const decodedClassSlug = decodeURIComponent(classSlug)
+    const decodedSubjectSlug = decodeURIComponent(subjectSlug)
+    const decodedChapterSlug = decodeURIComponent(chapterSlug)
+
+    const cls = await Class.findOne({ slug: decodedClassSlug, isActive: true }).select('_id').lean()
+    if (!cls) return null
+    const subject = await Subject.findOne({ classId: String(cls._id), slug: decodedSubjectSlug, isActive: true }).select('_id name').lean()
+    if (!subject) return null
+    const chapter = await Chapter.findOne({ subjectId: String(subject._id), slug: decodedChapterSlug, isActive: true }).select('name description').lean()
+    if (!chapter) return null
+    return { chapterName: (chapter as any).name, subjectName: (subject as any).name, description: (chapter as any).description }
   } catch {
     return null
   }
@@ -207,13 +398,13 @@ export async function generateMetadata({
   params: Promise<{ slug: string; subjectSlug: string; chapterSlug: string }>
 }) {
   const { slug, subjectSlug, chapterSlug } = await params
-  const data = await fetchChapterData(slug, subjectSlug, chapterSlug)
-  if (!data) {
+  const meta = await fetchChapterMeta(slug, subjectSlug, chapterSlug)
+  if (!meta) {
     return { title: 'Chapter Not Found | EduLearn' }
   }
   return {
-    title: `${data.chapter.name} - ${data.subjectData.name} | EduLearn`,
-    description: getDescriptionSummary(data.chapter.description, `Study ${data.chapter.name} with explanations, MCQ questions, and creative questions.`),
+    title: `${meta.chapterName} - ${meta.subjectName} | EduLearn`,
+    description: getDescriptionSummary(meta.description, `Study ${meta.chapterName} with explanations, MCQ questions, and creative questions.`),
   }
 }
 
@@ -234,6 +425,7 @@ export default async function ChapterDetailPage({
   }
 
   const { chapter, classData, subjectData } = data
+  const gradient = getSubjectGradient(subjectData.slug)
 
   // Parse Main Book entries from chapter.description (handles array + object formats)
   const mainBookEntries = parseMainBookEntries(chapter.description)
@@ -257,7 +449,7 @@ export default async function ChapterDetailPage({
   const totalQuestions = explanationCount + creativeCount + mcqCount
 
   return (
-    <main className="min-h-screen">
+    <main className="min-h-screen bg-white dark:bg-gray-950">
       {/* Breadcrumbs */}
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-6">
         <Breadcrumbs
@@ -269,51 +461,25 @@ export default async function ChapterDetailPage({
         />
       </div>
 
-      {/* Chapter Header - Compact */}
-      <section className="bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-500 py-3 sm:py-4">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-lg bg-white/20 backdrop-blur-sm flex items-center justify-center shrink-0">
-              <BookOpen className="h-4 w-4 text-white" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-lg sm:text-xl font-bold text-white truncate">
-                  {chapter.name}
-                </h1>
-                <span className="text-white/60 hidden sm:inline">|</span>
-                <span className="flex items-center gap-1 text-white/80 text-xs">
-                  <FileQuestion className="h-3.5 w-3.5" />
-                  {totalQuestions} Total
-                </span>
-              </div>
-              <div className="flex items-center gap-2 mt-1 text-white/80 text-xs flex-wrap">
-                {explanationCount > 0 && (
-                  <Badge className="bg-white/15 text-white border-0 text-[10px] h-5 px-1.5">
-                    <BookOpen className="mr-0.5 h-2.5 w-2.5" />
-                    {explanationCount} Main Book
-                  </Badge>
-                )}
-                {mcqCount > 0 && (
-                  <Badge className="bg-white/15 text-white border-0 text-[10px] h-5 px-1.5">
-                    <CheckSquare className="mr-0.5 h-2.5 w-2.5" />
-                    {mcqCount} MCQ
-                  </Badge>
-                )}
-                {creativeCount > 0 && (
-                  <Badge className="bg-white/15 text-white border-0 text-[10px] h-5 px-1.5">
-                    <Lightbulb className="mr-0.5 h-2.5 w-2.5" />
-                    {creativeCount} Creative
-                  </Badge>
-                )}
-              </div>
-            </div>
+      {/* Simple Header — matches Subject → Chapters page */}
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
+        <div className="flex items-center gap-3 mb-2">
+          <div className={`h-10 w-10 rounded-xl bg-gradient-to-r ${gradient} text-white flex items-center justify-center`}>
+            {renderSubjectIcon(subjectData.slug, 'h-5 w-5 text-white')}
           </div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
+            {chapter.name}
+          </h1>
         </div>
-      </section>
+        <p className="text-gray-500 dark:text-gray-400 text-base ml-[52px]">
+          {totalQuestions > 0
+            ? `${totalQuestions} questions available — Main Book, MCQ, and Creative`
+            : 'Study materials and practice questions for this chapter'}
+        </p>
+      </div>
 
-      {/* Content Area - Compact */}
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+      {/* Content Area */}
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pb-8 sm:pb-10">
         <div className="flex-1 min-w-0">
           <ChapterContentClient
             explanations={allExplanations}
@@ -321,6 +487,12 @@ export default async function ChapterDetailPage({
             mcqQuestions={chapter.mcqQuestions || []}
             totalCqCount={chapter.totalCqCount ?? creativeCount}
             totalMcqCount={chapter.totalMcqCount ?? mcqCount}
+            mainBookPdfUrl={chapter.mainBookPdfUrl ?? null}
+            mcqPdfUrl={chapter.mcqPdfUrl ?? null}
+            cqPdfUrl={chapter.cqPdfUrl ?? null}
+            chapterName={chapter.name}
+            subjectName={subjectData.name}
+            subjectSlug={subjectData.slug}
           />
 
           {/* Ad between content */}
@@ -330,8 +502,10 @@ export default async function ChapterDetailPage({
         </div>
       </div>
 
-      {/* Chapter Notes — fixed toggle tab + slide sidebar (desktop) / bottom sheet (mobile) */}
+      {/* Chapter Notes — fixed toggle tab + slide sidebar */}
       <ChapterNotesWidget content={chapter.sidebarContent} />
+
+      {/* AI Math Solver removed */}
     </main>
   )
 }

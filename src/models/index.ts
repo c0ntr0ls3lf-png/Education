@@ -2,7 +2,7 @@ import mongoose, { Schema, Document, Model } from 'mongoose';
 
 // ─── User ─────────────────────────────────────────────────────────────────
 export interface IUser extends Document {
-  _id: string;
+  _id: any;
   email: string;
   name?: string | null;
   image?: string | null;
@@ -14,6 +14,9 @@ export interface IUser extends Document {
   bio?: string | null;
   phone?: string | null;
   classId?: string | null;
+  selectedCategoryId?: string | null;
+  username?: string | null;
+  isProfileComplete?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -32,15 +35,17 @@ const userSchema = new Schema<IUser>(
     bio: { type: String, default: null },
     phone: { type: String, default: null },
     classId: { type: String, default: null },
+    selectedCategoryId: { type: String, default: null },
+    username: { type: String },
+    isProfileComplete: { type: Boolean, default: false },
   },
   { timestamps: true, versionKey: false }
 );
-userSchema.index({ email: 1 });
 userSchema.index({ role: 1 });
 
 // ─── Class ────────────────────────────────────────────────────────────────
 export interface IClass extends Document {
-  _id: string;
+  _id: any;
   name: string;
   slug: string;
   number: number;
@@ -49,6 +54,8 @@ export interface IClass extends Document {
   color?: string | null;
   order: number;
   isActive: boolean;
+  categoryId?: string | null;
+  subcategoryId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -64,11 +71,15 @@ const classSchema = new Schema<IClass>(
     color: { type: String, default: null },
     order: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },
+    categoryId: { type: String, default: null, ref: 'Category' },
+    subcategoryId: { type: String, default: null, ref: 'Subcategory' },
   },
   { timestamps: true, versionKey: false }
 );
-classSchema.index({ slug: 1 });
-classSchema.index({ number: 1 });
+
+// Fast slug lookup (most common query pattern: findOne({ slug, isActive }))
+classSchema.index({ slug: 1, isActive: 1 })
+classSchema.index({ isActive: 1, number: 1 })
 
 // Virtual for subjects (reverse relation)
 classSchema.virtual('subjects', {
@@ -79,7 +90,7 @@ classSchema.virtual('subjects', {
 
 // ─── Subject ──────────────────────────────────────────────────────────────
 export interface ISubject extends Document {
-  _id: string;
+  _id: any;
   name: string;
   slug: string;
   classId: string;
@@ -88,6 +99,8 @@ export interface ISubject extends Document {
   color?: string | null;
   order: number;
   isActive: boolean;
+  categoryId?: string | null;
+  subcategoryId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -103,12 +116,15 @@ const subjectSchema = new Schema<ISubject>(
     color: { type: String, default: null },
     order: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },
+    categoryId: { type: String, default: null, ref: 'Category' },
+    subcategoryId: { type: String, default: null, ref: 'Subcategory' },
   },
   { timestamps: true, versionKey: false }
 );
 subjectSchema.index({ classId: 1, slug: 1 }, { unique: true });
 subjectSchema.index({ slug: 1 });
-subjectSchema.index({ classId: 1 });
+subjectSchema.index({ classId: 1, isActive: 1 });
+subjectSchema.index({ classId: 1, slug: 1, isActive: 1 });
 
 // Virtuals for reverse relations
 subjectSchema.virtual('class', {
@@ -125,7 +141,7 @@ subjectSchema.virtual('chapters', {
 
 // ─── Chapter ──────────────────────────────────────────────────────────────
 export interface IChapter extends Document {
-  _id: string;
+  _id: any;
   name: string;
   slug: string;
   subjectId: string;
@@ -133,8 +149,16 @@ export interface IChapter extends Document {
   sidebarContent?: string | null;
   icon?: string | null;
   color?: string | null;
+  imageUrl?: string | null;
+  imageVisible?: boolean;
   order: number;
   isActive: boolean;
+  categoryId?: string | null;
+  subcategoryId?: string | null;
+  classId?: string | null;
+  mainBookPdfUrl?: string | null;
+  mcqPdfUrl?: string | null;
+  cqPdfUrl?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -149,14 +173,23 @@ const chapterSchema = new Schema<IChapter>(
     sidebarContent: { type: String, default: null },
     icon: { type: String, default: null },
     color: { type: String, default: null },
+    imageUrl: { type: String, default: null },
+    imageVisible: { type: Boolean, default: true },
     order: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },
+    categoryId: { type: String, default: null, ref: 'Category' },
+    subcategoryId: { type: String, default: null, ref: 'Subcategory' },
+    classId: { type: String, default: null, ref: 'Class' },
+    mainBookPdfUrl: { type: String, default: null },
+    mcqPdfUrl: { type: String, default: null },
+    cqPdfUrl: { type: String, default: null },
   },
   { timestamps: true, versionKey: false }
 );
 chapterSchema.index({ subjectId: 1, slug: 1 }, { unique: true });
 chapterSchema.index({ slug: 1 });
-chapterSchema.index({ subjectId: 1 });
+chapterSchema.index({ subjectId: 1, isActive: 1 });
+chapterSchema.index({ subjectId: 1, slug: 1, isActive: 1 });
 
 // Virtuals
 chapterSchema.virtual('subject', {
@@ -188,7 +221,7 @@ chapterSchema.virtual('videos', {
 
 // ─── Explanation ──────────────────────────────────────────────────────────
 export interface IExplanation extends Document {
-  _id: string;
+  _id: any;
   chapterId: string;
   question: string;
   solution?: string | null;
@@ -197,6 +230,8 @@ export interface IExplanation extends Document {
   difficulty: string;
   tags?: string | null;
   isActive: boolean;
+  type?: 'single' | 'group' | null;
+  subQuestions?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -212,6 +247,8 @@ const explanationSchema = new Schema<IExplanation>(
     difficulty: { type: String, default: 'medium' },
     tags: { type: String, default: null },
     isActive: { type: Boolean, default: true },
+    type: { type: String, default: 'single', enum: ['single', 'group'] },
+    subQuestions: { type: String, default: null },
   },
   { timestamps: true, versionKey: false }
 );
@@ -220,7 +257,7 @@ explanationSchema.index({ difficulty: 1 });
 
 // ─── Creative Question ────────────────────────────────────────────────────
 export interface ICreativeQuestion extends Document {
-  _id: string;
+  _id: any;
   chapterId: string;
   label: string;
   question: string;
@@ -239,6 +276,19 @@ export interface ICreativeQuestion extends Document {
   board_name?: string | null;
   exam_year?: number | null;
   sourceType?: 'board' | 'school' | 'model_test' | 'custom';
+  segmentK?: string | null;
+  segmentKh?: string | null;
+  segmentG?: string | null;
+  segmentGh?: string | null;
+  solutionK?: string | null;
+  solutionKh?: string | null;
+  solutionG?: string | null;
+  solutionGh?: string | null;
+  marksK?: number | null;
+  marksKh?: number | null;
+  marksG?: number | null;
+  marksGh?: number | null;
+  videoUrl?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -263,20 +313,31 @@ const creativeQuestionSchema = new Schema<ICreativeQuestion>(
     board_name: { type: String, default: null },
     exam_year: { type: Number, default: null },
     sourceType: { type: String, default: 'custom', enum: ['board', 'school', 'model_test', 'custom'] },
+    segmentK: { type: String, default: null },
+    segmentKh: { type: String, default: null },
+    segmentG: { type: String, default: null },
+    segmentGh: { type: String, default: null },
+    solutionK: { type: String, default: null },
+    solutionKh: { type: String, default: null },
+    solutionG: { type: String, default: null },
+    solutionGh: { type: String, default: null },
+    marksK: { type: Number, default: null },
+    marksKh: { type: Number, default: null },
+    marksG: { type: Number, default: null },
+    marksGh: { type: Number, default: null },
+    videoUrl: { type: String, default: null },
   },
   { timestamps: true, versionKey: false }
 );
 creativeQuestionSchema.index({ chapterId: 1 });
 creativeQuestionSchema.index({ label: 1 });
 creativeQuestionSchema.index({ difficulty: 1 });
-  creativeQuestionSchema.index({ board_name: 1 });
-  creativeQuestionSchema.index({ exam_year: 1 });
-  creativeQuestionSchema.index({ board_name: 1, exam_year: 1 });
+creativeQuestionSchema.index({ board_name: 1, exam_year: 1 });
 creativeQuestionSchema.index({ sourceType: 1 });
 
 // ─── MCQ Question ─────────────────────────────────────────────────────────
 export interface IMcqQuestion extends Document {
-  _id: string;
+  _id: any;
   chapterId: string;
   question: string;
   optionA: string;
@@ -296,6 +357,13 @@ export interface IMcqQuestion extends Document {
   board_name?: string | null;
   exam_year?: number | null;
   sourceType?: 'board' | 'school' | 'model_test' | 'custom';
+  // MCQ Type fields
+  mcqType?: 'single' | 'multiple_statement' | 'stem_based';
+  statements?: string | null; // JSON array of statements
+  correctCombination?: string | null;
+  stem?: string | null;
+  subMcqs?: string | null; // JSON array of sub-MCQs
+  tips?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -305,12 +373,12 @@ const mcqQuestionSchema = new Schema<IMcqQuestion>(
     _id: { type: String, default: () => new mongoose.Types.ObjectId().toString() },
     chapterId: { type: String, required: true, ref: 'Chapter' },
     question: { type: String, required: true },
-    optionA: { type: String, required: true },
-    optionB: { type: String, required: true },
+    optionA: { type: String, default: '' },
+    optionB: { type: String, default: '' },
     optionC: { type: String, default: null },
     optionD: { type: String, default: null },
     options: { type: String, default: null },
-    correctAnswer: { type: String, required: true },
+    correctAnswer: { type: String, default: 'A' },
     explanation: { type: String, default: null },
     videoUrl: { type: String, default: null },
     marks: { type: Number, default: 1 },
@@ -321,19 +389,24 @@ const mcqQuestionSchema = new Schema<IMcqQuestion>(
     board_name: { type: String, default: null },
     exam_year: { type: Number, default: null },
     sourceType: { type: String, default: 'custom', enum: ['board', 'school', 'model_test', 'custom'] },
+    // MCQ Type fields
+    mcqType: { type: String, default: 'single', enum: ['single', 'multiple_statement', 'stem_based'] },
+    statements: { type: String, default: null },
+    correctCombination: { type: String, default: null },
+    stem: { type: String, default: null },
+    subMcqs: { type: String, default: null },
+    tips: { type: String, default: null },
   },
   { timestamps: true, versionKey: false }
 );
 mcqQuestionSchema.index({ chapterId: 1 });
 mcqQuestionSchema.index({ difficulty: 1 });
-  mcqQuestionSchema.index({ board_name: 1 });
-  mcqQuestionSchema.index({ exam_year: 1 });
-  mcqQuestionSchema.index({ board_name: 1, exam_year: 1 });
+mcqQuestionSchema.index({ board_name: 1, exam_year: 1 });
 mcqQuestionSchema.index({ sourceType: 1 });
 
 // ─── Video ────────────────────────────────────────────────────────────────
 export interface IVideo extends Document {
-  _id: string;
+  _id: any;
   chapterId: string;
   title: string;
   url: string;
@@ -364,7 +437,7 @@ videoSchema.index({ chapterId: 1 });
 
 // ─── Exam ─────────────────────────────────────────────────────────────────
 export interface IExam extends Document {
-  _id: string;
+  _id: any;
   title: string;
   slug: string;
   description?: string | null;
@@ -405,7 +478,6 @@ const examSchema = new Schema<IExam>(
   },
   { timestamps: true, versionKey: false }
 );
-examSchema.index({ slug: 1 });
 examSchema.index({ type: 1 });
 examSchema.index({ sourceType: 1 });
 
@@ -418,7 +490,7 @@ examSchema.virtual('attempts', {
 
 // ─── Exam Attempt ─────────────────────────────────────────────────────────
 export interface IExamAttempt extends Document {
-  _id: string;
+  _id: any;
   examId: string;
   userId: string;
   answers: string;
@@ -455,8 +527,8 @@ const examAttemptSchema = new Schema<IExamAttempt>(
   },
   { timestamps: true, versionKey: false }
 );
-examAttemptSchema.index({ examId: 1 });
-examAttemptSchema.index({ userId: 1 });
+examAttemptSchema.index({ examId: 1, userId: 1 });
+examAttemptSchema.index({ userId: 1, completedAt: -1 });
 examAttemptSchema.index({ status: 1 });
 
 // Virtuals
@@ -539,7 +611,7 @@ notificationSchema.index({ isRead: 1 });
 
 // ─── Ad Zone ──────────────────────────────────────────────────────────────
 export interface IAdZone extends Document {
-  _id: string;
+  _id: any;
   name: string;
   slug: string;
   location: string;
@@ -572,7 +644,6 @@ const adZoneSchema = new Schema<IAdZone>(
   },
   { timestamps: true, versionKey: false }
 );
-adZoneSchema.index({ slug: 1 });
 adZoneSchema.index({ location: 1 });
 adZoneSchema.index({ isActive: 1 });
 
@@ -598,11 +669,10 @@ const seoSchema = new Schema(
   { timestamps: true, versionKey: false }
 );
 seoSchema.index({ entityType: 1 });
-seoSchema.index({ entityId: 1 });
 
 // ─── Setting ──────────────────────────────────────────────────────────────
 export interface ISetting extends Document {
-  _id: string;
+  _id: any;
   key: string;
   value: string;
   type: string;
@@ -621,7 +691,6 @@ const settingSchema = new Schema<ISetting>(
   },
   { timestamps: true, versionKey: false }
 );
-settingSchema.index({ key: 1 });
 settingSchema.index({ group: 1 });
 
 // ─── Analytics ────────────────────────────────────────────────────────────
@@ -642,7 +711,7 @@ analyticsSchema.index({ createdAt: 1 });
 
 // ─── Testimonial ──────────────────────────────────────────────────────────
 export interface ITestimonial extends Document {
-  _id: string;
+  _id: any;
   name: string;
   role?: string | null;
   content: string;
@@ -671,7 +740,7 @@ testimonialSchema.index({ isActive: 1 });
 
 // ─── FAQ ──────────────────────────────────────────────────────────────────
 export interface IFAQ extends Document {
-  _id: string;
+  _id: any;
   question: string;
   answer: string;
   category?: string | null;
@@ -697,7 +766,7 @@ faqSchema.index({ isActive: 1 });
 
 // ─── Quote ────────────────────────────────────────────────────────────────
 export interface IQuote extends Document {
-  _id: string;
+  _id: any;
   text: string;
   author?: string | null;
   isActive: boolean;
@@ -717,6 +786,63 @@ const quoteSchema = new Schema<IQuote>(
   { timestamps: true, versionKey: false }
 );
 quoteSchema.index({ isActive: 1 });
+
+// ─── Category ────────────────────────────────────────────────────────────────
+export interface ICategory extends Document {
+  _id: any;
+  name: string;
+  slug: string;
+  description: string;
+  icon: string;
+  color: string;
+  order: number;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const categorySchema = new Schema<ICategory>(
+  {
+    _id: { type: String, default: () => new mongoose.Types.ObjectId().toString() },
+    name: { type: String, required: true, unique: true },
+    slug: { type: String, required: true, unique: true },
+    description: { type: String, required: true },
+    icon: { type: String, required: true },
+    color: { type: String, required: true },
+    order: { type: Number, default: 0 },
+    isActive: { type: Boolean, default: true },
+  },
+  { timestamps: true, versionKey: false }
+);
+categorySchema.index({ order: 1 });
+categorySchema.index({ isActive: 1 });
+
+// ─── Subcategory ────────────────────────────────────────────────────────────────
+export interface ISubcategory extends Document {
+  _id: any;
+  categoryId: string;
+  name: string;
+  description: string;
+  order: number;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const subcategorySchema = new Schema<ISubcategory>(
+  {
+    _id: { type: String, default: () => new mongoose.Types.ObjectId().toString() },
+    categoryId: { type: String, required: true, ref: 'Category' },
+    name: { type: String, required: true },
+    description: { type: String, required: true },
+    order: { type: Number, default: 0 },
+    isActive: { type: Boolean, default: true },
+  },
+  { timestamps: true, versionKey: false }
+);
+subcategorySchema.index({ categoryId: 1 });
+subcategorySchema.index({ order: 1 });
+subcategorySchema.index({ isActive: 1 });
 
 // ─── Export Models ────────────────────────────────────────────────────────
 export const User = (mongoose.models.User as Model<IUser>) || mongoose.model<IUser>('User', userSchema);
@@ -740,3 +866,137 @@ export const Analytics = mongoose.models.Analytics || mongoose.model('Analytics'
 export const Testimonial = (mongoose.models.Testimonial as Model<ITestimonial>) || mongoose.model<ITestimonial>('Testimonial', testimonialSchema);
 export const FAQ = (mongoose.models.FAQ as Model<IFAQ>) || mongoose.model<IFAQ>('FAQ', faqSchema);
 export const Quote = (mongoose.models.Quote as Model<IQuote>) || mongoose.model<IQuote>('Quote', quoteSchema);
+export const Category = (mongoose.models.Category as Model<ICategory>) || mongoose.model<ICategory>('Category', categorySchema);
+export const Subcategory = (mongoose.models.Subcategory as Model<ISubcategory>) || mongoose.model<ISubcategory>('Subcategory', subcategorySchema);
+
+// ─── Pending Change ───────────────────────────────────────────────────────
+export interface IPendingChange extends Document {
+  _id: any;
+  teacherId: string;
+  teacherName: string;
+  entityType: string; // 'class'|'subject'|'chapter'|'mcq'|'cq'|'explanation'|'class_change'
+  entityId?: string | null;
+  action: 'create' | 'update';
+  data: any;
+  status: 'pending' | 'approved' | 'rejected';
+  isLocked: boolean;
+  reviewedBy?: string | null;
+  reviewNote?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const pendingChangeSchema = new Schema<IPendingChange>(
+  {
+    _id: { type: String, default: () => new mongoose.Types.ObjectId().toString() },
+    teacherId: { type: String, required: true, ref: 'User' },
+    teacherName: { type: String, required: true },
+    entityType: { type: String, required: true },
+    entityId: { type: String, default: null },
+    action: { type: String, required: true, enum: ['create', 'update'] },
+    data: { type: Schema.Types.Mixed, required: true },
+    status: { type: String, default: 'pending', enum: ['pending', 'approved', 'rejected'] },
+    isLocked: { type: Boolean, default: false },
+    reviewedBy: { type: String, default: null },
+    reviewNote: { type: String, default: null },
+  },
+  { timestamps: true, versionKey: false }
+);
+pendingChangeSchema.index({ status: 1 });
+pendingChangeSchema.index({ teacherId: 1 });
+
+// ─── Activity Log ──────────────────────────────────────────────────────────
+export interface IActivityLog extends Document {
+  _id: any;
+  userId: string;
+  userName: string;
+  userRole: string;
+  action: string;
+  entityType: string;
+  entityId?: string | null;
+  status?: string | null;
+  createdAt: Date;
+}
+
+const activityLogSchema = new Schema<IActivityLog>(
+  {
+    _id: { type: String, default: () => new mongoose.Types.ObjectId().toString() },
+    userId: { type: String, required: true, ref: 'User' },
+    userName: { type: String, required: true },
+    userRole: { type: String, required: true },
+    action: { type: String, required: true },
+    entityType: { type: String, required: true },
+    entityId: { type: String, default: null },
+    status: { type: String, default: null },
+  },
+  { timestamps: { createdAt: true, updatedAt: false }, versionKey: false }
+);
+activityLogSchema.index({ userId: 1 });
+activityLogSchema.index({ createdAt: -1 });
+
+export const PendingChange = (mongoose.models.PendingChange as Model<IPendingChange>) || mongoose.model<IPendingChange>('PendingChange', pendingChangeSchema);
+export const ActivityLog = (mongoose.models.ActivityLog as Model<IActivityLog>) || mongoose.model<IActivityLog>('ActivityLog', activityLogSchema);
+
+// ─── Blog Post ─────────────────────────────────────────────────────────────
+export interface IBlogPost extends Document {
+  _id: any;
+  title: string;
+  slug: string;
+  content: string;
+  coverImage?: string | null;
+  category?: string | null;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const blogPostSchema = new Schema<IBlogPost>(
+  {
+    _id: { type: String, default: () => new mongoose.Types.ObjectId().toString() },
+    title: { type: String, required: true },
+    slug: { type: String, required: true, unique: true },
+    content: { type: String, required: true },
+    coverImage: { type: String, default: null },
+    category: { type: String, default: 'General' },
+    isActive: { type: Boolean, default: true },
+  },
+  { timestamps: true, versionKey: false }
+);
+blogPostSchema.index({ isActive: 1 });
+blogPostSchema.index({ createdAt: -1 });
+
+export const BlogPost = (mongoose.models.BlogPost as Model<IBlogPost>) || mongoose.model<IBlogPost>('BlogPost', blogPostSchema);
+
+// ─── Notice ────────────────────────────────────────────────────────────────
+export interface INotice extends Document {
+  _id: any;
+  title: string;
+  slug: string;
+  content: string;
+  category: 'academic' | 'exam' | 'admission' | 'general';
+  isImportant: boolean;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const noticeSchema = new Schema<INotice>(
+  {
+    _id: { type: String, default: () => new mongoose.Types.ObjectId().toString() },
+    title: { type: String, required: true },
+    slug: { type: String, required: true, unique: true },
+    content: { type: String, required: true },
+    category: { type: String, required: true, enum: ['academic', 'exam', 'admission', 'general'] },
+    isImportant: { type: Boolean, default: false },
+    isActive: { type: Boolean, default: true },
+  },
+  { timestamps: true, versionKey: false }
+);
+noticeSchema.index({ isActive: 1 });
+noticeSchema.index({ isImportant: 1 });
+noticeSchema.index({ createdAt: -1 });
+noticeSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 }); // Auto-delete after 30 days
+
+export const Notice = (mongoose.models.Notice as Model<INotice>) || mongoose.model<INotice>('Notice', noticeSchema);
+
+

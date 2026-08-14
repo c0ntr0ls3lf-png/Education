@@ -19,6 +19,10 @@ import {
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Breadcrumbs } from '@/components/shared/Breadcrumbs'
+import { connectDB, waitForSeed, Class, Subject, Chapter, toDoc } from '@/lib/db'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 60
 
 // ─── Types ──────────────────────────────────────────────
 interface SubjectItem {
@@ -101,38 +105,47 @@ function getSubjectGradient(slug: string): string {
   return 'from-emerald-500 to-teal-600'
 }
 
+// ─── Direct DB Fetch ────────────────────────────────────
 async function fetchClassBySlug(slug: string): Promise<ClassData | null> {
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ||
-    (process.env.PORT ? `http://localhost:${process.env.PORT}` : 'http://localhost:3001')
-    const res = await fetch(new URL('/api/classes?include=subjects', baseUrl), {
-      cache: 'no-store',
-    })
-    if (!res.ok) return null
-    const data = await res.json()
-    if (!Array.isArray(data)) return null
-    const classItem = data.find((c: ClassData) => c.slug === slug)
-    if (!classItem) return null
+    await connectDB()
 
-    // Fetch subjects with chapters for accurate chapter counts
-    if (classItem.id) {
-      const subjectsRes = await fetch(
-        new URL(`/api/subjects?classId=${classItem.id}&include=chapters`, baseUrl),
-        { cache: 'no-store' }
-      )
-      if (subjectsRes.ok) {
-        const subjects = await subjectsRes.json()
-        if (Array.isArray(subjects)) {
-          classItem.subjects = subjects
-        }
-      }
+    const cls = await Class.findOne({ slug, isActive: true })
+      .select('_id name slug number description icon color')
+      .lean()
+    if (!cls) return null
+
+    const subjects = await Subject.find({ classId: String(cls._id), isActive: true })
+      .sort({ order: 1 })
+      .select('_id name slug classId icon color')
+      .lean()
+
+    const chapters = await Chapter.find({
+      subjectId: { $in: subjects.map(s => String(s._id)) },
+      isActive: true,
+    })
+      .select('_id name subjectId')
+      .lean()
+
+    // Group chapters by subjectId
+    const chaptersBySubject = new Map<string, typeof chapters>()
+    for (const ch of chapters) {
+      const key = String(ch.subjectId)
+      if (!chaptersBySubject.has(key)) chaptersBySubject.set(key, [])
+      chaptersBySubject.get(key)!.push(ch)
     }
 
-    return classItem
+    const subjectsWithChapters = subjects.map(s => ({
+      ...s,
+      chapters: chaptersBySubject.get(String(s._id)) || [],
+    }))
+
+    return toDoc<ClassData>({ ...cls, subjects: subjectsWithChapters })
   } catch {
     return null
   }
 }
+
 
 // ─── Metadata ───────────────────────────────────────────
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {

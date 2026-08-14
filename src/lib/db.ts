@@ -1,22 +1,36 @@
 import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
 
 // Connection state for Next.js hot-reload caching
 const globalForDb = globalThis as unknown as {
   mongooseConnected?: boolean;
   connectPromise?: Promise<typeof mongoose>;
-  mongodPromise?: Promise<MongoMemoryServer>;
+  mongodPromise?: Promise<any>;
   seedingPromise?: Promise<void>;
 };
+
+/** Wait for the initial seed to finish (only relevant for in-memory MongoDB fallback) */
+export async function waitForSeed(): Promise<void> {
+  // No-op when using a real MongoDB URI — seeding only applies to in-memory server
+  if (process.env.MONGODB_URI?.trim()) return
+  if (globalForDb.seedingPromise) {
+    await globalForDb.seedingPromise
+  }
+}
 
 async function getMongoMemoryServer() {
   if (globalForDb.mongodPromise) return globalForDb.mongodPromise;
   
-  globalForDb.mongodPromise = MongoMemoryServer.create().then(server => {
+  globalForDb.mongodPromise = (async () => {
+    const { MongoMemoryServer } = await import('mongodb-memory-server');
+    const server = await MongoMemoryServer.create({
+      instance: {
+        launchTimeout: 60000, // 60 seconds to prevent timeout on slow startup/downloads
+      }
+    });
     const uri = server.getUri();
     console.log(`🐘 MongoDB Memory Server started at: ${uri}`);
     return server;
-  });
+  })();
   
   return globalForDb.mongodPromise;
 }
@@ -58,51 +72,70 @@ export async function connectDB(): Promise<typeof mongoose> {
     return globalForDb.connectPromise;
   }
 
-  const uri = await getMongoURI();
+  const tryConnect = async (uri: string, isFallback: boolean = false): Promise<typeof mongoose> => {
+    const promise = mongoose.connect(uri, {
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 8000, // 8 seconds timeout
+      socketTimeoutMS: 45000,
+    });
 
-  const promise = mongoose.connect(uri, {
-    maxPoolSize: 10,
-    serverSelectionTimeoutMS: 10000,
-    socketTimeoutMS: 45000,
-  });
-
-  globalForDb.connectPromise = promise;
-
-  try {
+    globalForDb.connectPromise = promise;
     const conn = await promise;
     globalForDb.mongooseConnected = true;
     console.log(`✅ MongoDB connected: ${conn.connection.host}`);
 
-    // Auto-seed if using memory server and it's empty
-    const envUri = process.env.MONGODB_URI?.trim();
-    if (!envUri || envUri.length === 0) {
+    // Auto-seed if it's in-memory MongoDB
+    const isMemoryDb = uri.includes('127.0.0.1') || uri.includes('localhost') || !process.env.MONGODB_URI?.trim() || isFallback;
+    if (isMemoryDb) {
       if (!globalForDb.seedingPromise) {
         globalForDb.seedingPromise = (async () => {
           const ClassModel = conn.models.Class || conn.model('Class');
           const count = await ClassModel.countDocuments();
           if (count === 0) {
-            console.log('🌱 In-memory database detected and empty. Auto-seeding...');
+            console.log('🌱 In-memory / Fallback database detected and empty. Auto-seeding...');
             try {
               const { seedDatabase } = await import('./seed');
               await seedDatabase();
               console.log('✅ Auto-seeding completed!');
             } catch (seedErr) {
               console.error('❌ Auto-seeding failed:', seedErr);
-              globalForDb.seedingPromise = undefined; // Reset on failure so it can retry
+              globalForDb.seedingPromise = undefined;
               throw seedErr;
             }
           }
         })();
       }
-      
-      // Wait for seeding to complete before returning
+      // Wait for seeding
       await globalForDb.seedingPromise;
     }
 
     return conn;
+  };
+
+  const primaryUri = process.env.MONGODB_URI?.trim();
+  if (primaryUri && primaryUri.length > 0) {
+    try {
+      return await tryConnect(primaryUri);
+    } catch (error) {
+      console.warn(`⚠️ Failed to connect to persistent MongoDB: ${error instanceof Error ? error.message : error}`);
+      console.log('🔄 Falling back to in-memory MongoDB...');
+      globalForDb.connectPromise = undefined;
+      try {
+        await mongoose.disconnect();
+      } catch (disErr) {
+        console.error('Error during mongoose disconnect:', disErr);
+      }
+    }
+  }
+
+  // Fallback to in-memory MongoDB
+  const memoryServer = await getMongoMemoryServer();
+  const fallbackUri = memoryServer.getUri();
+  try {
+    return await tryConnect(fallbackUri, true);
   } catch (error) {
     globalForDb.connectPromise = undefined;
-    console.error('❌ MongoDB connection failed:', error instanceof Error ? error.message : error);
+    console.error('❌ Failed to connect to fallback in-memory MongoDB:', error instanceof Error ? error.message : error);
     throw error;
   }
 }
@@ -119,7 +152,20 @@ export function toDoc<T = Record<string, unknown>>(data: unknown): T {
     return data.map(item => toDoc(item)) as T;
   }
 
-  if (data !== null && data !== undefined && typeof data === 'object' && !(data instanceof Date)) {
+  if (data instanceof Date) {
+    return data.toISOString() as unknown as T;
+  }
+
+  if (data !== null && data !== undefined && typeof data === 'object') {
+    // If it's a Mongoose/MongoDB ObjectId, convert it to a string
+    if (
+      data.constructor?.name === 'ObjectID' ||
+      data.constructor?.name === 'ObjectId' ||
+      (data as any)._bsontype === 'ObjectID'
+    ) {
+      return String(data) as unknown as T;
+    }
+
     const obj = data as Record<string, unknown>;
 
     // If this object has an _id, transform it to id
@@ -127,7 +173,7 @@ export function toDoc<T = Record<string, unknown>>(data: unknown): T {
       const result: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(obj)) {
         if (key === '_id') {
-          result.id = value;
+          result.id = toDoc(value);
         } else if (key === '__v') {
           // Skip version key
         } else {
@@ -172,4 +218,13 @@ export {
   Testimonial,
   FAQ,
   Quote,
+  Category,
+  Subcategory,
+  PendingChange,
+  ActivityLog,
+  BlogPost,
+  Notice,
 } from '@/models';
+
+export type { IBlogPost, INotice } from '@/models';
+

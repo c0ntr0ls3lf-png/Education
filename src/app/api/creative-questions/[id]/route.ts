@@ -28,9 +28,50 @@ export async function PUT(
     const { id } = await params;
     const body = await request.json();
 
+    // Normalize label to avoid empty strings
+    if (body.hasOwnProperty('label') && (!body.label || String(body.label).trim() === '')) {
+      delete body.label; // Keep original label if it was submitted empty
+    } else if (body.label) {
+      body.label = String(body.label).trim();
+    }
+
     // Normalize board_name
     if (!body.board_name) {
       body.board_name = body.boardName || body.board || null;
+    }
+
+    // Normalize segment fields to subQuestions
+    const segmentK = body.segmentK || '';
+    const segmentKh = body.segmentKh || '';
+    const segmentG = body.segmentG || '';
+    const segmentGh = body.segmentGh || '';
+    const solutionK = body.solutionK || '';
+    const solutionKh = body.solutionKh || '';
+    const solutionG = body.solutionG || '';
+    const solutionGh = body.solutionGh || '';
+
+    if (segmentK || segmentKh || segmentG || segmentGh) {
+      const arr: { label: string; text: string }[] = [];
+      if (segmentK) {
+        const fullText = solutionK ? `${segmentK} <hr> <strong>উত্তর:</strong> ${solutionK}` : segmentK;
+        arr.push({ label: 'ক', text: fullText });
+      }
+      if (segmentKh) {
+        const fullText = solutionKh ? `${segmentKh} <hr> <strong>উত্তর:</strong> ${solutionKh}` : segmentKh;
+        arr.push({ label: 'খ', text: fullText });
+      }
+      if (segmentG) {
+        const fullText = solutionG ? `${segmentG} <hr> <strong>উত্তর:</strong> ${solutionG}` : segmentG;
+        arr.push({ label: 'গ', text: fullText });
+      }
+      if (segmentGh) {
+        const fullText = solutionGh ? `${segmentGh} <hr> <strong>উত্তর:</strong> ${solutionGh}` : segmentGh;
+        arr.push({ label: 'ঘ', text: fullText });
+      }
+      body.subQuestions = JSON.stringify(arr);
+      body.subQuestionA = segmentK || null;
+      body.subQuestionB = segmentKh || null;
+      body.subQuestionC = segmentG || null;
     }
 
     // Normalize and default exam_year
@@ -49,7 +90,7 @@ export async function PUT(
       body.exam_year = finalExamYear;
     }
 
-    const updated = await CreativeQuestion.findByIdAndUpdate(id, body, { new: true }).lean();
+    const updated = await CreativeQuestion.findByIdAndUpdate(id, body, { new: true, strict: false }).lean();
     return NextResponse.json(toDoc(updated));
   } catch (error) {
     console.error('Error updating creative question:', error);

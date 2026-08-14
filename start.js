@@ -198,7 +198,7 @@ async function main() {
   const PORT = process.env.PORT || '3000';
   process.env.PORT = PORT;
   console.log(`\n🚀 Starting Next.js dev server on port ${PORT}...`);
-  const next = spawn('npx', ['next', 'dev', '-p', PORT, '--no-turbopack'], {
+  const next = spawn('npx', ['next', 'dev', '-p', PORT], {
     cwd: __dirname,
     stdio: 'inherit',
     env: { ...process.env, PORT },

@@ -382,7 +382,7 @@ export function McqExamEngine({
                             }`}
                           >
                             <span className="font-medium mr-1">{optionLabels[optIdx]}.</span>
-                            <MathRenderer content={(q as Record<string, string>)[key]} className="inline text-sm" />
+                            <MathRenderer content={(q as any)[key]} className="inline text-sm" />
                             {isCorrectOption && (
                               <CheckCircle2 className="w-4 h-4 inline ml-1 text-emerald-500" />
                             )}
@@ -538,7 +538,7 @@ export function McqExamEngine({
                 {optionKeys.map((key, optIdx) => {
                   const optionValue = optionLabels[optIdx]
                   const isSelected = answers[currentQuestion?.id] === optionValue
-                  const optionText = currentQuestion ? (currentQuestion as Record<string, string>)[key] : ''
+                  const optionText = currentQuestion ? (currentQuestion as any)[key] : ''
 
                   return (
                     <motion.button

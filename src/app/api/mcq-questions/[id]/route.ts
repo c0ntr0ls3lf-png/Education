@@ -33,6 +33,10 @@ export async function PUT(
       body.board_name = body.boardName || body.board || null;
     }
 
+    if (!body.question && body.mcqType === 'stem_based' && body.stem) {
+      body.question = body.stem;
+    }
+
     // Normalize and default exam_year
     let finalExamYear: number | null = null;
     const rawYear = (body.exam_year !== undefined && body.exam_year !== null && body.exam_year !== '') ? body.exam_year : ((body.questionYear !== undefined && body.questionYear !== null && body.questionYear !== '') ? body.questionYear : null);
@@ -49,7 +53,7 @@ export async function PUT(
       body.exam_year = finalExamYear;
     }
 
-    const updated = await McqQuestion.findByIdAndUpdate(id, body, { new: true }).lean();
+    const updated = await McqQuestion.findByIdAndUpdate(id, body, { new: true, strict: false }).lean();
     return NextResponse.json(toDoc(updated));
   } catch (error) {
     console.error('Error updating MCQ question:', error);

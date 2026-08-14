@@ -11,7 +11,7 @@ import {
   Save, Trash2, X, Loader2, AlertTriangle,
   CheckCircle, Clock, Globe, FileText,
   Lightbulb, CheckSquare, Plus, GripVertical,
-  Sigma, ImagePlus, BookMarked, Youtube, Code
+  Sigma, ImagePlus, BookMarked, Youtube, Code, Settings
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -37,6 +37,9 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import MetadataFields from './MetadataFields'
+import { MathRenderer } from '@/components/exam/MathRenderer'
+import { htmlToPlainText } from '@/lib/html-utils'
+import MainBookQAEditor, { MainBookEntry } from './MainBookQAEditor'
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -69,12 +72,27 @@ interface McqOptionItem {
   text: string
 }
 
-interface McqForm {
-  id?: string
-  _key: string
+interface McqSubQuestion {
   question: string
   options: McqOptionItem[]
   correctAnswer: string
+}
+
+type McqType = 'single' | 'multiple_statement' | 'stem_based'
+
+interface McqForm {
+  id?: string
+  _key: string
+  mcqType: McqType
+  question: string
+  options: McqOptionItem[]
+  correctAnswer: string
+  // multiple_statement fields
+  statements: string[]        // ['stmt i', 'stmt ii', 'stmt iii']
+  correctCombination: string  // e.g. 'i ও ii'
+  // stem_based fields
+  stem: string
+  subMcqs: McqSubQuestion[]
   explanation: string
   videoUrl: string
   marks: number
@@ -92,7 +110,9 @@ interface ChapterData {
   sidebarContent?: string;
   icon?: string;
   color?: string;
-  order: number;
+  imageUrl?: string | null;
+  imageVisible?: boolean;
+  order: number | '';
   isActive: boolean;
   chapterType?: string;
   visibility?: boolean;
@@ -100,6 +120,9 @@ interface ChapterData {
   metaTitle?: string;
   metaDescription?: string;
   keywords?: string;
+  mainBookPdfUrl?: string | null;
+  mcqPdfUrl?: string | null;
+  cqPdfUrl?: string | null;
 }
 
 interface EditChapterModalProps {
@@ -111,14 +134,18 @@ interface EditChapterModalProps {
   onSaved: () => void
 }
 
-type ChapterTab = 'main_book' | 'creative_question' | 'mcq'
+type ChapterTab = 'general' | 'main_book' | 'creative_question' | 'mcq' | 'sidebar' | 'design' | 'seo'
 
 // ─── Tab Configuration ─────────────────────────────────────────────────────
 
-const TABS: { id: ChapterTab; label: string; icon: React.ElementType }[] = [
-  { id: 'main_book', label: 'Main Book', icon: BookOpen },
-  { id: 'creative_question', label: 'Creative Question', icon: Lightbulb },
-  { id: 'mcq', label: 'MCQ', icon: CheckSquare },
+const TABS: { id: ChapterTab; label: string; icon: React.ElementType; description: string }[] = [
+  { id: 'general', label: 'General Info', icon: Settings, description: 'Basic details & classification' },
+  { id: 'main_book', label: 'Main Book Q&A', icon: BookOpen, description: 'Manage main book Q&As' },
+  { id: 'creative_question', label: 'Creative Questions', icon: Lightbulb, description: 'Manage creative questions' },
+  { id: 'mcq', label: 'MCQs', icon: CheckSquare, description: 'Manage multiple-choice questions' },
+  { id: 'sidebar', label: 'Sidebar Notes', icon: FileText, description: 'Notes & formulas widget' },
+  { id: 'design', label: 'Design & Visibility', icon: Palette, description: 'Visuals, order, status' },
+  { id: 'seo', label: 'SEO Settings', icon: Globe, description: 'Search engine optimization' },
 ]
 
 const EMOJIS = [
@@ -235,7 +262,7 @@ function SourceBadgeSelector({
 
 // ─── Rich Text Editor Component ────────────────────────────────────────────
 
-function RichTextEditor({
+export function RichTextEditor({
   value,
   onChange,
   placeholder = 'Write chapter content here...',
@@ -249,12 +276,39 @@ function RichTextEditor({
   showMathButton?: boolean
 }) {
   const editorRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const isInternalChange = useRef(false)
   const [isFocused, setIsFocused] = useState(false)
   const [isHtmlMode, setIsHtmlMode] = useState(false)
 
-  const execCommand = (command: string, value?: string) => {
-    document.execCommand(command, false, value)
-    if (editorRef.current) onChange(editorRef.current.innerHTML)
+  const syncFromEditor = useCallback(() => {
+    if (editorRef.current) {
+      isInternalChange.current = true
+      onChange(editorRef.current.innerHTML)
+    }
+  }, [onChange])
+
+  // Sync external value without overwriting active edits
+  useEffect(() => {
+    if (isHtmlMode || !editorRef.current) return
+    if (isInternalChange.current) {
+      isInternalChange.current = false
+      return
+    }
+    if (isFocused) return
+    if (editorRef.current.innerHTML !== (value || '')) {
+      editorRef.current.innerHTML = value || ''
+    }
+  }, [value, isHtmlMode, isFocused])
+
+  // Math builder states
+  const [mathDialogOpen, setMathDialogOpen] = useState(false)
+  const [formula, setFormula] = useState('')
+  const [savedRange, setSavedRange] = useState<Range | null>(null)
+
+  const execCommand = (command: string, val?: string) => {
+    document.execCommand(command, false, val)
+    syncFromEditor()
     editorRef.current?.focus()
   }
 
@@ -273,24 +327,78 @@ function RichTextEditor({
   }
 
   const handlePaste = (e: React.ClipboardEvent) => {
-    e.preventDefault()
-    const text = e.clipboardData.getData('text/plain')
-    document.execCommand('insertText', false, text)
+    // Get HTML content from clipboard
+    const html = e.clipboardData.getData('text/html')
+    
+    if (html) {
+      e.preventDefault()
+      // Insert raw HTML to preserve all structure including collapsible sections
+      document.execCommand('insertHTML', false, html)
+      syncFromEditor()
+    } else {
+      // Fallback to plain text if no HTML
+      e.preventDefault()
+      const text = e.clipboardData.getData('text/plain')
+      document.execCommand('insertText', false, text)
+      syncFromEditor()
+    }
   }
 
-  const handleInsertMath = () => {
-    const formula = prompt('Enter LaTeX formula (e.g. \\frac{a}{b} or E=mc^2):')
-    if (formula) {
-      execCommand('insertHTML', `<span class="math-formula inline-block px-1.5 py-0.5 bg-emerald-50 dark:bg-emerald-900/20 rounded border border-emerald-200 dark:border-emerald-800 font-mono text-emerald-700 dark:text-emerald-300 text-sm" contenteditable="false">$${formula}$</span>`)
+  const openMathDialog = () => {
+    const sel = window.getSelection()
+    if (sel && sel.rangeCount > 0) {
+      setSavedRange(sel.getRangeAt(0))
+    } else {
+      setSavedRange(null)
     }
+    setFormula('')
+    setMathDialogOpen(true)
+  }
+
+  const insertMathFormula = () => {
+    if (!formula.trim()) return
+    if (editorRef.current) {
+      editorRef.current.focus()
+    }
+    const sel = window.getSelection()
+    if (sel && savedRange) {
+      sel.removeAllRanges()
+      sel.addRange(savedRange)
+    }
+
+    // Insert LaTeX inline formula
+    execCommand(
+      'insertHTML',
+      `<span class="math-formula inline-block px-1.5 py-0.5 bg-emerald-50 dark:bg-emerald-900/20 rounded border border-emerald-200 dark:border-emerald-800 font-mono text-emerald-700 dark:text-emerald-300 text-sm" contenteditable="false">$${formula}$</span>&nbsp;`
+    )
+    setMathDialogOpen(false)
+  }
+
+  const handleInsertSymbol = (latex: string) => {
+    if (!textareaRef.current) return
+    const textarea = textareaRef.current
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    const text = textarea.value
+    const before = text.substring(0, start)
+    const after = text.substring(end, text.length)
+    setFormula(before + latex + after)
+
+    // Reset focus and position cursor right after the inserted LaTeX snippet
+    setTimeout(() => {
+      textarea.focus()
+      textarea.setSelectionRange(start + latex.length, start + latex.length)
+    }, 0)
   }
 
   const handleToggleHtml = () => {
     if (isHtmlMode) {
       // Switching from HTML -> Visual: push textarea value into contentEditable
       if (editorRef.current) {
-        editorRef.current.innerHTML = value
+        editorRef.current.innerHTML = value || ''
       }
+    } else {
+      syncFromEditor()
     }
     setIsHtmlMode(!isHtmlMode)
   }
@@ -307,7 +415,56 @@ function RichTextEditor({
     { type: 'separator' },
     { icon: Link2, label: 'Insert Link', action: handleInsertLink },
     { icon: ImageIcon, label: 'Insert Image', action: handleInsertImage },
-    ...(showMathButton ? [{ type: 'separator' as const }, { icon: Sigma as React.ElementType, label: 'Insert Math Formula', action: handleInsertMath }] : []),
+    ...(showMathButton ? [{ type: 'separator' as const }, { icon: Sigma as React.ElementType, label: 'Insert Math Formula', action: openMathDialog }] : []),
+  ]
+
+  const mathCategories = [
+    {
+      name: 'General',
+      items: [
+        { label: 'Fraction (ভগ্নাংশ)', latex: '\\frac{a}{b}' },
+        { label: 'Square Root (বর্গমূল)', latex: '\\sqrt{x}' },
+        { label: 'Exponent (পাওয়ার)', latex: 'a^b' },
+        { label: 'Subscript (সাবস্ক্রিপ্ট)', latex: 'x_i' },
+        { label: 'Plus-Minus (±)', latex: '\\pm' },
+        { label: 'Multiplication (×)', latex: '\\times' },
+        { label: 'Division (÷)', latex: '\\div' },
+      ],
+    },
+    {
+      name: 'Sets',
+      items: [
+        { label: 'Element Of (∈)', latex: '\\in' },
+        { label: 'Not Element (∉)', latex: '\\notin' },
+        { label: 'Union (∪)', latex: '\\cup' },
+        { label: 'Intersection (∩)', latex: '\\cap' },
+        { label: 'Subset (⊆)', latex: '\\subset' },
+        { label: 'Empty Set (∅)', latex: '\\emptyset' },
+        { label: 'Set Brackets ({x})', latex: '\\{x\\}' },
+      ],
+    },
+    {
+      name: 'Recurring',
+      items: [
+        { label: 'Single Dot (পৌনঃপুনিক)', latex: '\\dot{x}' },
+        { label: 'Group Bar (পৌনঃপুনিক)', latex: '\\overline{xy}' },
+        { label: 'Ex. 0.3 (পৌনঃপুনিক)', latex: '0.\\dot{3}' },
+        { label: 'Ex. 0.35 (পৌনঃপুনিক)', latex: '0.\\overline{35}' },
+      ],
+    },
+    {
+      name: 'Symbols',
+      items: [
+        { label: 'Theta (θ)', latex: '\\theta' },
+        { label: 'Alpha (α)', latex: '\\alpha' },
+        { label: 'Beta (β)', latex: '\\beta' },
+        { label: 'Pi (π)', latex: '\\pi' },
+        { label: 'Not Equal (≠)', latex: '\\neq' },
+        { label: 'Approx (≈)', latex: '\\approx' },
+        { label: 'Greater/Equal (≥)', latex: '\\ge' },
+        { label: 'Less/Equal (≤)', latex: '\\le' },
+      ],
+    },
   ]
 
   return (
@@ -376,23 +533,115 @@ function RichTextEditor({
           ref={editorRef}
           contentEditable
           suppressContentEditableWarning
-          onInput={() => { if (editorRef.current) onChange(editorRef.current.innerHTML) }}
+          onInput={syncFromEditor}
           onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
+          onBlur={() => {
+            syncFromEditor()
+            setIsFocused(false)
+          }}
           onPaste={handlePaste}
           data-placeholder={placeholder}
           className={
             'p-4 focus:outline-none text-sm leading-relaxed ' +
-            'empty:before:text-muted-foreground/50 ' +
+            'empty:before:text-muted-foreground/50 empty:before:content-[attr(data-placeholder)] ' +
             '[&_a]:text-emerald-600 [&_a]:underline [&_a:hover]:text-emerald-700 ' +
             '[&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 ' +
             '[&_img]:max-w-full [&_img]:rounded-lg [&_img]:my-2 ' +
             '[&_blockquote]:border-l-2 [&_blockquote]:border-emerald-500 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-muted-foreground'
           }
           style={{ minHeight: minHeight + 'px' }}
-          dangerouslySetInnerHTML={{ __html: value }}
         />
       )}
+
+      {/* Math Builder Dialog */}
+      <Dialog open={mathDialogOpen} onOpenChange={setMathDialogOpen}>
+        <DialogContent className="max-w-2xl bg-card border shadow-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
+              <Sigma className="h-5 w-5" />
+              LaTeX Math Formula Builder
+            </DialogTitle>
+            <DialogDescription>
+              Build mathematical equations visually. Select formulas from the categories below or type directly in LaTeX.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 py-2">
+            {/* Left: Input and Preview */}
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground">Type LaTeX Formula</Label>
+                <textarea
+                  ref={textareaRef}
+                  value={formula}
+                  onChange={(e) => setFormula(e.target.value)}
+                  placeholder="e.g. \frac{a}{b} + c^2"
+                  rows={4}
+                  className="w-full p-2.5 text-xs font-mono border rounded-md focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-background"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground">Live KaTeX Preview</Label>
+                <div className="min-h-[80px] p-3 rounded-md border bg-muted/20 flex items-center justify-center overflow-auto text-emerald-700 dark:text-emerald-300">
+                  {formula.trim() ? (
+                    <MathRenderer content={`$${formula}$`} />
+                  ) : (
+                    <p className="text-xs text-muted-foreground/60 italic">Formula preview will render here...</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Quick-Insert Shortcuts */}
+            <div className="space-y-2 border-t md:border-t-0 md:border-l pl-0 md:pl-4 pt-4 md:pt-0">
+              <Label className="text-xs font-semibold text-muted-foreground">Quick Symbols & Templates</Label>
+              <ScrollArea className="h-[220px] rounded-md border p-2 bg-muted/10">
+                <div className="space-y-4">
+                  {mathCategories.map((cat) => (
+                    <div key={cat.name} className="space-y-1.5">
+                      <h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                        {cat.name}
+                      </h4>
+                      <div className="grid grid-cols-2 gap-1">
+                        {cat.items.map((item) => (
+                          <button
+                            key={item.label}
+                            type="button"
+                            onClick={() => handleInsertSymbol(item.latex)}
+                            className="text-left text-[11px] px-2 py-1.5 rounded border bg-card hover:bg-emerald-50 dark:hover:bg-emerald-950/20 hover:border-emerald-300 transition-colors font-sans truncate"
+                            title={item.latex}
+                          >
+                            <span className="font-mono text-emerald-600 dark:text-emerald-400 font-semibold mr-1">
+                              {item.latex}
+                            </span>
+                            <span className="text-muted-foreground text-[10px]">
+                              ({item.label.split(' ')[0]})
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 mt-4 pt-2 border-t">
+            <Button variant="ghost" size="sm" onClick={() => setMathDialogOpen(false)} className="h-8 text-xs">
+              Cancel
+            </Button>
+            <Button
+              onClick={insertMathFormula}
+              disabled={!formula.trim()}
+              className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              Insert Formula
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -570,6 +819,7 @@ function CreativeQuestionItem({
   onChange: (item: CreativeQuestionForm) => void
   onRemove: () => void
 }) {
+  const [isOpen, setIsOpen] = useState(!item.question.trim())
   const addSubQuestion = () => {
     const nextLabel = BANGLA_LABELS[item.subQuestions.length] || `(${item.subQuestions.length + 1})`
     onChange({ ...item, subQuestions: [...item.subQuestions, { label: nextLabel, text: '' }] })
@@ -590,82 +840,114 @@ function CreativeQuestionItem({
 
   return (
     <div className="rounded-xl border bg-card overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2.5 bg-muted/30 border-b">
+      {/* Header (always visible, clickable to toggle collapse) */}
+      <div 
+        className="flex items-center justify-between px-4 py-2.5 bg-muted/30 border-b cursor-pointer hover:bg-muted/10 transition-colors"
+        onClick={() => setIsOpen(!isOpen)}
+      >
         <div className="flex items-center gap-2">
-          <GripVertical className="h-4 w-4 text-muted-foreground/50" />
-          <Badge variant="outline" className="font-mono text-xs h-5">
+          <GripVertical className="h-4 w-4 text-muted-foreground/50 shrink-0" />
+          <Badge variant="outline" className="font-mono text-xs h-5 shrink-0">
             Q{index + 1}
           </Badge>
-          <Badge variant="outline" className="text-xs h-5">
+          <Badge variant="outline" className="text-xs h-5 shrink-0">
             Label: {item.label || 'A'}
           </Badge>
+          {item.subQuestions.length > 0 && (
+            <Badge variant="outline" className="text-xs h-5 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 shrink-0">
+              {item.subQuestions.length} sub-question(s)
+            </Badge>
+          )}
         </div>
-        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={onRemove}>
-          <X className="h-3.5 w-3.5" />
-        </Button>
+        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={() => setIsOpen(!isOpen)}>
+            {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          </Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={onRemove}>
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </div>
-      <div className="p-4 space-y-4">
-        {/* Question + Metadata inline (board/school name & year alongside question) */}
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-          <div className="lg:col-span-3 space-y-2">
-            <Label className="text-xs font-medium text-muted-foreground">Question</Label>
-            <RichTextEditor value={item.question} onChange={(v) => onChange({ ...item, question: v })}
-              placeholder="Enter the creative question..." minHeight={70} />
-          </div>
-          <div className="lg:col-span-2 space-y-1.5">
-            <Label className="text-xs font-medium text-muted-foreground">Metadata</Label>
-            <div className="rounded-lg border bg-muted/10 p-2.5 space-y-2">
-              <MetadataFields
-                board_name={item.board_name || ''}
-                exam_year={item.exam_year || ''}
-                sourceType={(item.sourceType || 'custom') as any}
-                onChange={(field, val) => onChange({ ...item, [field]: val })}
-              />
+
+      {/* Closed Preview */}
+      {!isOpen && (
+        <div 
+          className="px-4 py-2 text-xs text-muted-foreground bg-card cursor-pointer hover:bg-muted/10" 
+          onClick={() => setIsOpen(true)}
+        >
+          {item.question.trim() ? (
+            <div className="line-clamp-1" dangerouslySetInnerHTML={{ __html: item.question }} />
+          ) : (
+            <p className="italic">Click to add scenario / question...</p>
+          )}
+        </div>
+      )}
+
+      {/* Expanded Content */}
+      {isOpen && (
+        <div className="p-4 space-y-4">
+          {/* Question + Metadata inline (board/school name & year alongside question) */}
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+            <div className="lg:col-span-3 space-y-2">
+              <Label className="text-xs font-medium text-muted-foreground">Question</Label>
+              <RichTextEditor value={item.question} onChange={(v) => onChange({ ...item, question: v })}
+                placeholder="Enter the creative question..." minHeight={70} />
+            </div>
+            <div className="lg:col-span-2 space-y-1.5">
+              <Label className="text-xs font-medium text-muted-foreground">Metadata</Label>
+              <div className="rounded-lg border bg-muted/10 p-2.5 space-y-2">
+                <MetadataFields
+                  board_name={item.board_name || ''}
+                  exam_year={item.exam_year || ''}
+                  sourceType={(item.sourceType || 'custom') as any}
+                  onChange={(field, val) => onChange({ ...item, [field]: val })}
+                />
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Dynamic Sub-questions */}
-        <div className="space-y-3 border-l-2 border-emerald-300 pl-4">
-          <div className="flex items-center justify-between">
-            <Label className="text-xs font-medium text-muted-foreground">Sub Questions ({item.subQuestions.length})</Label>
-            <Button type="button" variant="ghost" size="sm" onClick={addSubQuestion} className="h-7 text-xs gap-1 text-emerald-600 hover:text-emerald-700">
-              <Plus className="h-3 w-3" /> Add Sub Question
-            </Button>
+          {/* Dynamic Sub-questions */}
+          <div className="space-y-3 border-l-2 border-emerald-300 pl-4">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-medium text-muted-foreground">Sub Questions ({item.subQuestions.length})</Label>
+              <Button type="button" variant="ghost" size="sm" onClick={addSubQuestion} className="h-7 text-xs gap-1 text-emerald-600 hover:text-emerald-700">
+                <Plus className="h-3 w-3" /> Add Sub Question
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {item.subQuestions.map((sq, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-xs h-5 shrink-0">{sq.label}</Badge>
+                  <RichTextEditor value={sq.text} onChange={(v) => updateSubQuestion(idx, v)}
+                    placeholder={`Sub-question ${sq.label}...`} minHeight={40} />
+                  <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                    onClick={() => removeSubQuestion(idx)}>
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
+              {item.subQuestions.length === 0 && (
+                <p className="text-xs text-muted-foreground italic">No sub-questions added. Click &quot;Add Sub Question&quot; to add.</p>
+              )}
+            </div>
           </div>
+
+          {/* Model Answer */}
           <div className="space-y-2">
-            {item.subQuestions.map((sq, idx) => (
-              <div key={idx} className="flex items-center gap-2">
-                <Badge variant="outline" className="text-xs h-5 shrink-0">{sq.label}</Badge>
-                <RichTextEditor value={sq.text} onChange={(v) => updateSubQuestion(idx, v)}
-                  placeholder={`Sub-question ${sq.label}...`} minHeight={40} />
-                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
-                  onClick={() => removeSubQuestion(idx)}>
-                  <X className="h-3 w-3" />
-                </Button>
-              </div>
-            ))}
-            {item.subQuestions.length === 0 && (
-              <p className="text-xs text-muted-foreground italic">No sub-questions added. Click &quot;Add Sub Question&quot; to add.</p>
-            )}
+            <Label className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              Model Answer
+            </Label>
+            <RichTextEditor value={item.answer} onChange={(v) => onChange({ ...item, answer: v })}
+              placeholder="Write the complete model answer for this question..." minHeight={100} />
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs font-medium text-muted-foreground">YouTube URL (Video Lecture)</Label>
+            <Input value={item.explanation || ''} onChange={(e) => onChange({ ...item, explanation: e.target.value })}
+              placeholder="https://www.youtube.com/watch?v=..." />
           </div>
         </div>
-
-        {/* Model Answer */}
-        <div className="space-y-2">
-          <Label className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
-            Model Answer
-          </Label>
-          <RichTextEditor value={item.answer} onChange={(v) => onChange({ ...item, answer: v })}
-            placeholder="Write the complete model answer for this question..." minHeight={100} />
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-xs font-medium text-muted-foreground">YouTube URL (Video Lecture)</Label>
-          <Input value={item.explanation || ''} onChange={(e) => onChange({ ...item, explanation: e.target.value })}
-            placeholder="https://www.youtube.com/watch?v=..." />
-        </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -738,9 +1020,166 @@ function CreativeQuestionEditor({
   )
 }
 
-// ─── MCQ Editor Item ───────────────────────────────────────────────────────
+// ─── MCQ Helpers ───────────────────────────────────────────────────────────
 
-const MCQ_OPTION_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
+const MCQ_OPTION_LABELS = ['ক', 'খ', 'গ', 'ঘ']
+const MCQ_ROMAN = ['i', 'ii', 'iii']
+const COMBO_OPTIONS = [
+  'i ও ii', 'i ও iii', 'ii ও iii', 'i, ii ও iii',
+  'i only', 'ii only', 'iii only',
+]
+
+const MCQ_TYPE_CONFIG = [
+  {
+    key: 'single' as McqType,
+    label: 'সাধারণ',
+    sublabel: 'বহুনির্বাচনি',
+    color: 'emerald',
+    bgClass: 'bg-emerald-50 dark:bg-emerald-950/30',
+    borderClass: 'border-emerald-200 dark:border-emerald-800',
+    badgeClass: 'bg-emerald-500 text-white',
+    activeBtnClass: 'bg-emerald-600 border-emerald-600 text-white shadow',
+    hoverClass: 'hover:border-emerald-400',
+  },
+  {
+    key: 'multiple_statement' as McqType,
+    label: 'বহুপদী',
+    sublabel: 'সমাপ্তিসূচক',
+    color: 'violet',
+    bgClass: 'bg-violet-50 dark:bg-violet-950/30',
+    borderClass: 'border-violet-200 dark:border-violet-800',
+    badgeClass: 'bg-violet-500 text-white',
+    activeBtnClass: 'bg-violet-600 border-violet-600 text-white shadow',
+    hoverClass: 'hover:border-violet-400',
+  },
+  {
+    key: 'stem_based' as McqType,
+    label: 'অভিন্ন তথ্যভিত্তিক',
+    sublabel: 'বহুনির্বাচনি',
+    color: 'amber',
+    bgClass: 'bg-amber-50 dark:bg-amber-950/30',
+    borderClass: 'border-amber-200 dark:border-amber-800',
+    badgeClass: 'bg-amber-500 text-white',
+    activeBtnClass: 'bg-amber-600 border-amber-600 text-white shadow',
+    hoverClass: 'hover:border-amber-400',
+  },
+] as const
+
+function makeDefaultSubMcq(): McqSubQuestion {
+  return {
+    question: '',
+    options: MCQ_OPTION_LABELS.map((l) => ({ label: l, text: '' })),
+    correctAnswer: 'ক',
+  }
+}
+
+function makeDefaultMcq(type: McqType = 'single'): McqForm {
+  return {
+    _key: uniqueKey(),
+    mcqType: type,
+    question: '',
+    options: MCQ_OPTION_LABELS.map((l) => ({ label: l, text: '' })),
+    correctAnswer: 'ক',
+    statements: ['', '', ''],
+    correctCombination: '',
+    stem: '',
+    subMcqs: [makeDefaultSubMcq()],
+    explanation: '',
+    videoUrl: '',
+    marks: 1,
+    board_name: '',
+    exam_year: new Date().getFullYear().toString(),
+    sourceType: 'board',
+  }
+}
+
+// ─── Shared Options Grid ───────────────────────────────────────────────────
+
+const OPTION_COLOR_MAP = {
+  emerald: {
+    active: 'border-emerald-300 bg-emerald-50/50 dark:bg-emerald-900/10 dark:border-emerald-700',
+    btn: 'bg-emerald-500 border-emerald-500 text-white',
+  },
+  violet: {
+    active: 'border-violet-300 bg-violet-50/50 dark:bg-violet-900/10 dark:border-violet-700',
+    btn: 'bg-violet-500 border-violet-500 text-white',
+  },
+  amber: {
+    active: 'border-amber-300 bg-amber-50/50 dark:bg-amber-900/10 dark:border-amber-700',
+    btn: 'bg-amber-500 border-amber-500 text-white',
+  },
+} as const
+
+type OptionColor = keyof typeof OPTION_COLOR_MAP
+
+function OptionsGrid({
+  options,
+  correctAnswer,
+  onOptionChange,
+  onCorrectChange,
+  colorClass,
+}: {
+  options: McqOptionItem[]
+  correctAnswer: string
+  onOptionChange: (idx: number, val: string) => void
+  onCorrectChange: (label: string) => void
+  colorClass: OptionColor
+}) {
+  const colors = OPTION_COLOR_MAP[colorClass]
+  return (
+    <div className="space-y-2">
+      <p className="text-[10px] text-muted-foreground">
+        👆 <strong>ক/খ/গ/ঘ</strong> বাটনে ক্লিক করুন → সঠিক উত্তর সেট হবে
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {options.map((opt, idx) => {
+          const isCorrect = correctAnswer === opt.label
+          return (
+            <div
+              key={opt.label}
+              className={cn(
+                'relative flex items-center gap-2 p-2 rounded-lg border-2 transition-all',
+                isCorrect ? colors.active + ' shadow-sm' : 'border-input hover:border-muted-foreground/30'
+              )}
+            >
+              {isCorrect && (
+                <span className={cn(
+                  'absolute -top-2.5 right-2 text-[9px] font-bold px-1.5 py-0.5 rounded-full z-10',
+                  colorClass === 'emerald' ? 'bg-emerald-500 text-white' :
+                  colorClass === 'violet'  ? 'bg-violet-500 text-white' :
+                  'bg-amber-500 text-white'
+                )}>
+                  ✓ সঠিক উত্তর
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => onCorrectChange(opt.label)}
+                className={cn(
+                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold transition-all border-2 select-none',
+                  isCorrect
+                    ? colors.btn + ' scale-110 shadow-md'
+                    : 'bg-muted border-muted text-muted-foreground hover:border-muted-foreground/60 hover:scale-105'
+                )}
+                title={isCorrect ? 'সঠিক উত্তর চিহ্নিত' : 'ক্লিক করুন সঠিক উত্তর সেট করতে'}
+              >
+                {opt.label}
+              </button>
+              <RichTextEditor
+                value={opt.text}
+                onChange={(v) => onOptionChange(idx, v)}
+                placeholder={`বিকল্প ${opt.label}`}
+                minHeight={36}
+              />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ─── MCQ Item ──────────────────────────────────────────────────────────────
 
 function McqItem({
   item,
@@ -753,159 +1192,323 @@ function McqItem({
   onChange: (item: McqForm) => void
   onRemove: () => void
 }) {
-  const [isOpen, setIsOpen] = useState(!item.question.trim())
+  const [isOpen, setIsOpen] = useState(!item.question.trim() && !item.stem?.trim())
+  const typeCfg = MCQ_TYPE_CONFIG.find((t) => t.key === item.mcqType) ?? MCQ_TYPE_CONFIG[0]
 
-  const addOption = () => {
-    const nextLabel = MCQ_OPTION_LABELS[item.options.length] || `(${item.options.length + 1})`
-    onChange({ ...item, options: [...item.options, { label: nextLabel, text: '' }] })
-  }
-
-  const removeOption = (idx: number) => {
-    if (item.options.length <= 2) {
-      toast.error('At least 2 options are required')
-      return
-    }
-    const removedLabel = item.options[idx].label
-    const updated = item.options.filter((_, i) => i !== idx)
-    // Re-label
-    const relabeled = updated.map((opt, i) => ({ ...opt, label: MCQ_OPTION_LABELS[i] || `(${i + 1})` }))
-    // Fix correctAnswer if removed
-    let newCorrectAnswer = item.correctAnswer
-    if (newCorrectAnswer === removedLabel) {
-      newCorrectAnswer = relabeled[0]?.label || 'A'
-    } else {
-      // Re-map correctAnswer to new label
-      const oldIdx = item.options.findIndex(o => o.label === item.correctAnswer)
-      if (oldIdx > idx) {
-        newCorrectAnswer = relabeled[oldIdx - 1]?.label || relabeled[0]?.label || 'A'
-      }
-    }
-    onChange({ ...item, options: relabeled, correctAnswer: newCorrectAnswer })
-  }
+  const setType = (t: McqType) => onChange({ ...item, mcqType: t })
 
   const updateOption = (idx: number, text: string) => {
-    const updated = [...item.options]
-    updated[idx] = { ...updated[idx], text }
-    onChange({ ...item, options: updated })
+    const opts = [...item.options]
+    opts[idx] = { ...opts[idx], text }
+    onChange({ ...item, options: opts })
   }
 
+  const updateStatement = (idx: number, val: string) => {
+    const stmts = [...item.statements]
+    stmts[idx] = val
+    onChange({ ...item, statements: stmts })
+  }
+
+  const updateSubMcq = (idx: number, field: keyof McqSubQuestion, val: any) => {
+    const subs = item.subMcqs.map((s, i) => (i === idx ? { ...s, [field]: val } : s))
+    onChange({ ...item, subMcqs: subs })
+  }
+
+  const updateSubOption = (subIdx: number, optIdx: number, val: string) => {
+    const subs = item.subMcqs.map((s, i) => {
+      if (i !== subIdx) return s
+      const opts = s.options.map((o, j) => (j === optIdx ? { ...o, text: val } : o))
+      return { ...s, options: opts }
+    })
+    onChange({ ...item, subMcqs: subs })
+  }
+
+  const addSubMcq = () =>
+    onChange({ ...item, subMcqs: [...item.subMcqs, makeDefaultSubMcq()] })
+
+  const removeSubMcq = (idx: number) => {
+    if (item.subMcqs.length <= 1) return
+    onChange({ ...item, subMcqs: item.subMcqs.filter((_, i) => i !== idx) })
+  }
+
+  const headerPreview = item.mcqType === 'stem_based'
+    ? (item.stem || item.subMcqs[0]?.question || '')
+    : item.question
+
   return (
-    <div className="rounded-xl border bg-card overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2.5 bg-muted/30 border-b">
-        <div className="flex items-center gap-2">
-          <GripVertical className="h-4 w-4 text-muted-foreground/50" />
-          <Badge variant="outline" className="font-mono text-xs h-5">
-            Q{index + 1}
-          </Badge>
-          {item.correctAnswer && (
-            <Badge variant="outline" className="text-xs h-5 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800">
-              ✓ {item.correctAnswer}
-            </Badge>
-          )}
-          <Badge variant="outline" className="text-xs h-5">{item.marks || 1} mark(s)</Badge>
-        </div>
-        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={onRemove}>
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-
-      {/* Metadata: Board/School Name, Year, Source Type */}
-      <div className="px-4 py-2 bg-muted/10 border-b space-y-2">
-        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Source Metadata</p>
-        <MetadataFields
-          board_name={item.board_name || ''}
-          exam_year={item.exam_year || ''}
-          sourceType={(item.sourceType || 'custom') as any}
-          onChange={(field, val) => onChange({ ...item, [field]: val })}
-        />
-      </div>
-
-      {/* Question - always visible, clickable to toggle */}
+    <div className={cn('rounded-xl border overflow-hidden transition-all', typeCfg.borderClass)}>
+      {/* ── Header ── */}
       <div
-        className="p-4 cursor-pointer hover:bg-muted/20 transition-colors"
+        className={cn(
+          'flex items-center justify-between px-4 py-2.5 border-b cursor-pointer transition-colors',
+          typeCfg.bgClass
+        )}
         onClick={() => setIsOpen(!isOpen)}
       >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            {item.question.trim() ? (
-              <p className="text-sm leading-relaxed text-foreground line-clamp-2">{item.question}</p>
-            ) : (
-              <p className="text-sm text-muted-foreground italic">Click to add question...</p>
-            )}
-          </div>
-          <span className="shrink-0 mt-0.5">
-            {isOpen ? (
-              <ChevronDown className="h-4 w-4 text-emerald-500" />
-            ) : (
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            )}
+        <div className="flex items-center gap-2 min-w-0">
+          <GripVertical className="h-4 w-4 text-muted-foreground/50 shrink-0" />
+          <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0', typeCfg.badgeClass)}>
+            Q{index + 1}
           </span>
+          <span className="text-[10px] font-semibold text-muted-foreground shrink-0">
+            {typeCfg.label}
+          </span>
+          {headerPreview.trim() && (
+            <span
+              className="text-xs text-muted-foreground truncate max-w-[200px]"
+              dangerouslySetInnerHTML={{ __html: headerPreview }}
+            />
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={() => setIsOpen(!isOpen)}>
+            {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          </Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={onRemove}>
+            <X className="h-3.5 w-3.5" />
+          </Button>
         </div>
       </div>
 
-      {/* Editing fields - shown on expand */}
-      {isOpen && (
-        <div className="px-4 pb-4 space-y-4 border-t pt-4">
-          <div className="space-y-2">
-            <Label className="text-xs font-medium text-muted-foreground">Question</Label>
-            <RichTextEditor value={item.question} onChange={(v) => onChange({ ...item, question: v })}
-              placeholder="Enter the MCQ question..." minHeight={60} />
-          </div>
+      {/* ── Collapsed Preview ── */}
+      {!isOpen && (
+        <div
+          className="px-4 py-2 text-xs text-muted-foreground cursor-pointer hover:bg-muted/10"
+          onClick={() => setIsOpen(true)}
+        >
+          {headerPreview.trim() ? (
+            <div className="line-clamp-1" dangerouslySetInnerHTML={{ __html: headerPreview }} />
+          ) : (
+            <p className="italic">ক্লিক করুন প্রশ্ন যোগ করতে...</p>
+          )}
+        </div>
+      )}
 
-          {/* Dynamic Options */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium text-muted-foreground">Options ({item.options.length})</Label>
-              <Button type="button" variant="ghost" size="sm" onClick={addOption} className="h-7 text-xs gap-1 text-emerald-600 hover:text-emerald-700">
-                <Plus className="h-3 w-3" /> Add Option
-              </Button>
-            </div>
-            <div className="space-y-2">
-              {item.options.map((opt, idx) => (
-                <div key={idx} className={cn(
-                  'flex items-center gap-2 p-2 rounded-lg border transition-all',
-                  item.correctAnswer === opt.label
-                    ? 'border-emerald-300 bg-emerald-50/50 dark:bg-emerald-900/10 dark:border-emerald-700'
-                    : 'border-input'
-                )}>
-                  <button
-                    type="button"
-                    onClick={() => onChange({ ...item, correctAnswer: opt.label })}
-                    className={cn(
-                      'flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-xs font-bold transition-all',
-                      item.correctAnswer === opt.label
-                        ? 'bg-emerald-500 text-white'
-                        : 'bg-muted text-muted-foreground hover:bg-muted-foreground/20'
-                    )}
-                    title={item.correctAnswer === opt.label ? 'Correct answer' : 'Set as correct'}
-                  >
-                    {opt.label}
-                  </button>
-                  <RichTextEditor value={opt.text} onChange={(v) => updateOption(idx, v)}
-                    placeholder={`Option ${opt.label}`} minHeight={36} />
-                  <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0 text-destructive hover:text-destructive"
-                    onClick={() => removeOption(idx)}>
-                    <X className="h-3 w-3" />
-                  </Button>
-                </div>
+      {/* ── Expanded Content ── */}
+      {isOpen && (
+        <div className="p-4 space-y-5">
+
+          {/* MCQ Type Selector */}
+          <div className="space-y-2">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">প্রশ্নের ধরন</p>
+            <div className="grid grid-cols-3 gap-1.5">
+              {MCQ_TYPE_CONFIG.map((cfg) => (
+                <button
+                  key={cfg.key}
+                  type="button"
+                  onClick={() => setType(cfg.key)}
+                  className={cn(
+                    'flex flex-col items-center gap-0.5 px-3 py-2 rounded-lg border text-center transition-all text-[10px] font-semibold leading-tight',
+                    item.mcqType === cfg.key
+                      ? cfg.activeBtnClass
+                      : `border-input bg-background text-muted-foreground ${cfg.hoverClass} hover:bg-muted/30`
+                  )}
+                >
+                  <span className="text-[11px] font-bold">{cfg.label}</span>
+                  <span className="opacity-75">{cfg.sublabel}</span>
+                </button>
               ))}
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label className="text-xs font-medium text-muted-foreground">Explanation (optional)</Label>
-            <RichTextEditor value={item.explanation} onChange={(v) => onChange({ ...item, explanation: v })}
-              placeholder="Explain why this answer is correct..." minHeight={50} />
+          {/* Source Metadata */}
+          <div className="p-3 bg-muted/10 rounded-lg border space-y-2">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">উৎস তথ্য</p>
+            <MetadataFields
+              board_name={item.board_name || ''}
+              exam_year={item.exam_year || ''}
+              sourceType={(item.sourceType || 'board') as any}
+              onChange={(field, val) => onChange({ ...item, [field]: val })}
+            />
           </div>
 
-          <div className="space-y-2">
-            <Label className="text-xs font-medium text-muted-foreground">Video Lecture (optional)</Label>
+          {/* ── SINGLE (সাধারণ) ── */}
+          {item.mcqType === 'single' && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground">প্রশ্ন</Label>
+                <RichTextEditor
+                  value={item.question}
+                  onChange={(v) => onChange({ ...item, question: v })}
+                  placeholder="প্রশ্নটি লিখুন..."
+                  minHeight={70}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground">বিকল্পসমূহ</Label>
+                <OptionsGrid
+                  options={item.options}
+                  correctAnswer={item.correctAnswer}
+                  onOptionChange={updateOption}
+                  onCorrectChange={(l) => onChange({ ...item, correctAnswer: l })}
+                  colorClass="emerald"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ── MULTIPLE STATEMENT (বহুপদী সমাপ্তিসূচক) ── */}
+          {item.mcqType === 'multiple_statement' && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground">মূল প্রশ্ন</Label>
+                <RichTextEditor
+                  value={item.question}
+                  onChange={(v) => onChange({ ...item, question: v })}
+                  placeholder="প্রশ্নটি লিখুন যেটি নিচের বাক্যগুলো উল্লেখ করে..."
+                  minHeight={60}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold text-muted-foreground">বাক্যসমূহ (Statements)</Label>
+                {item.statements.map((stmt, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <div className="mt-2.5 shrink-0">
+                      <span className={cn(
+                        'inline-flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-bold border-2 text-violet-700 border-violet-400 bg-violet-50 dark:bg-violet-950/40 dark:text-violet-300 dark:border-violet-700'
+                      )}>
+                        {MCQ_ROMAN[i]}
+                      </span>
+                    </div>
+                    <div className="flex-1">
+                      <RichTextEditor
+                        value={stmt}
+                        onChange={(v) => updateStatement(i, v)}
+                        placeholder={`বাক্য ${MCQ_ROMAN[i]}...`}
+                        minHeight={46}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold text-muted-foreground">নিচের কোনটি সঠিক?</Label>
+                <p className="text-[10px] text-muted-foreground -mt-1">সঠিক সমন্বয়টি ক্লিক করে নির্বাচন করুন</p>
+                <div className="flex flex-wrap gap-2">
+                  {COMBO_OPTIONS.map((combo) => (
+                    <button
+                      key={combo}
+                      type="button"
+                      onClick={() => onChange({ ...item, correctCombination: combo })}
+                      className={cn(
+                        'px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all',
+                        item.correctCombination === combo
+                          ? 'bg-violet-600 border-violet-600 text-white shadow-sm'
+                          : 'border-input bg-background text-foreground hover:border-violet-400 hover:bg-violet-50 dark:hover:bg-violet-950/30'
+                      )}
+                    >
+                      {combo}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground">বিকল্পসমূহ (A-D)</Label>
+                <p className="text-[10px] text-muted-foreground -mt-1">ক-খ-গ-ঘ বিকল্পগুলো লিখুন এবং সঠিক উত্তর ক্লিক করুন</p>
+                <OptionsGrid
+                  options={item.options}
+                  correctAnswer={item.correctAnswer}
+                  onOptionChange={updateOption}
+                  onCorrectChange={(l) => onChange({ ...item, correctAnswer: l })}
+                  colorClass="violet"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ── STEM BASED (অভিন্ন তথ্যভিত্তিক) ── */}
+          {item.mcqType === 'stem_based' && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground">উদ্দীপক / অনুচ্ছেদ (Stem)</Label>
+                <p className="text-[10px] text-muted-foreground -mt-1">নিচের সব প্রশ্নগুলো এই অনুচ্ছেদের উপর ভিত্তি করে তৈরি</p>
+                <RichTextEditor
+                  value={item.stem}
+                  onChange={(v) => onChange({ ...item, stem: v })}
+                  placeholder="অনুচ্ছেদ, তথ্য, বা চিত্রের বিবরণ লিখুন..."
+                  minHeight={100}
+                />
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-muted-foreground">
+                    উপ-প্রশ্নসমূহ ({item.subMcqs.length}টি)
+                  </Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={addSubMcq}
+                    className="h-7 text-xs gap-1 border-amber-300 text-amber-700 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-700 dark:hover:bg-amber-950/30"
+                  >
+                    <Plus className="h-3 w-3" /> উপ-প্রশ্ন যোগ
+                  </Button>
+                </div>
+
+                {item.subMcqs.map((sub, si) => (
+                  <div
+                    key={si}
+                    className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/40 dark:bg-amber-950/20 p-3 space-y-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-amber-700 dark:text-amber-400">
+                        উপ-প্রশ্ন {si + 1}
+                      </span>
+                      {item.subMcqs.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeSubMcq(si)}
+                          className="text-destructive hover:text-destructive/80 transition-colors"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    <RichTextEditor
+                      value={sub.question}
+                      onChange={(v) => updateSubMcq(si, 'question', v)}
+                      placeholder={`উপ-প্রশ্ন ${si + 1}...`}
+                      minHeight={50}
+                    />
+                    <OptionsGrid
+                      options={sub.options}
+                      correctAnswer={sub.correctAnswer}
+                      onOptionChange={(oi, val) => updateSubOption(si, oi, val)}
+                      onCorrectChange={(l) => updateSubMcq(si, 'correctAnswer', l)}
+                      colorClass="amber"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Explanation & Video ── */}
+          <div className="space-y-2 pt-1 border-t">
+            <Label className="text-xs font-semibold text-muted-foreground">ব্যাখ্যা (ঐচ্ছিক)</Label>
+            <RichTextEditor
+              value={item.explanation}
+              onChange={(v) => onChange({ ...item, explanation: v })}
+              placeholder="কেন এই উত্তরটি সঠিক তা ব্যাখ্যা করুন..."
+              minHeight={50}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs font-semibold text-muted-foreground">ভিডিও লেকচার (ঐচ্ছিক)</Label>
             <div className="relative">
               <Youtube className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input value={item.videoUrl} onChange={(e) => onChange({ ...item, videoUrl: e.target.value })}
-                placeholder="https://www.youtube.com/watch?v=..." className="h-9 pl-8" />
+              <Input
+                value={item.videoUrl}
+                onChange={(e) => onChange({ ...item, videoUrl: e.target.value })}
+                placeholder="https://www.youtube.com/watch?v=..."
+                className="h-9 pl-8"
+              />
             </div>
-            <p className="text-xs text-muted-foreground">Paste a YouTube video URL for a video lecture related to this question</p>
           </div>
         </div>
       )}
@@ -915,6 +1518,15 @@ function McqItem({
 
 // ─── MCQ Tab Editor ────────────────────────────────────────────────────────
 
+const MCQ_CATEGORY_TABS = [
+  { key: 'all', label: 'সকল MCQ' },
+  { key: 'single', label: 'সাধারণ' },
+  { key: 'multiple_statement', label: 'বহুপদী' },
+  { key: 'stem_based', label: 'অভিন্ন তথ্যভিত্তিক' },
+] as const
+
+type McqCategoryFilter = (typeof MCQ_CATEGORY_TABS)[number]['key']
+
 function McqEditor({
   items,
   onChange,
@@ -922,61 +1534,138 @@ function McqEditor({
   items: McqForm[]
   onChange: (items: McqForm[]) => void
 }) {
-  const addItem = () => {
-    onChange([...items, {
-      _key: uniqueKey(), question: '',
-      options: [
-        { label: 'A', text: '' },
-        { label: 'B', text: '' },
-      ],
-      correctAnswer: 'A', explanation: '', videoUrl: '', marks: 1,
-    }])
+  const [categoryFilter, setCategoryFilter] = useState<McqCategoryFilter>('all')
+
+  const addItem = (type: McqType = 'single') => {
+    onChange([...items, makeDefaultMcq(type)])
+    // Switch to that category tab so user sees the new item
+    setCategoryFilter(type)
   }
 
   const updateItem = (key: string, updated: McqForm) => {
-    onChange(items.map(i => i._key === key ? updated : i))
+    onChange(items.map((i) => (i._key === key ? updated : i)))
   }
 
   const removeItem = (key: string) => {
     if (items.length <= 1) {
-      toast.error('At least one MCQ is required')
+      toast.error('কমপক্ষে একটি MCQ থাকা দরকার')
       return
     }
-    onChange(items.filter(i => i._key !== key))
+    onChange(items.filter((i) => i._key !== key))
+  }
+
+  const visibleItems =
+    categoryFilter === 'all'
+      ? items
+      : items.filter((i) => i.mcqType === categoryFilter)
+
+  const counts = {
+    all: items.length,
+    single: items.filter((i) => i.mcqType === 'single').length,
+    multiple_statement: items.filter((i) => i.mcqType === 'multiple_statement').length,
+    stem_based: items.filter((i) => i.mcqType === 'stem_based').length,
   }
 
   return (
     <div className="space-y-4">
-      {items.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-12 text-muted-foreground border-2 border-dashed rounded-xl">
-          <CheckSquare className="h-10 w-10 mb-3 opacity-40" />
-          <p className="text-sm font-medium">No MCQs yet</p>
-          <p className="text-xs mt-1">Click the button below to add your first MCQ</p>
+      {/* Category Tabs */}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap gap-1.5">
+          {MCQ_CATEGORY_TABS.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setCategoryFilter(tab.key)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all',
+                categoryFilter === tab.key
+                  ? 'bg-foreground text-background border-foreground'
+                  : 'bg-background border-input text-muted-foreground hover:border-muted-foreground hover:text-foreground'
+              )}
+            >
+              {tab.label}
+              <span className={cn(
+                'inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold px-1',
+                categoryFilter === tab.key
+                  ? 'bg-background/20 text-background'
+                  : 'bg-muted text-muted-foreground'
+              )}>
+                {counts[tab.key as keyof typeof counts]}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Add Buttons */}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => addItem('single')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dashed border-emerald-400 text-emerald-700 dark:text-emerald-400 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/20 hover:bg-emerald-100 dark:hover:bg-emerald-950/40 text-xs font-semibold transition-all"
+          >
+            <Plus className="h-3.5 w-3.5" /> সাধারণ MCQ
+          </button>
+          <button
+            type="button"
+            onClick={() => addItem('multiple_statement')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dashed border-violet-400 text-violet-700 dark:text-violet-400 dark:border-violet-700 bg-violet-50/50 dark:bg-violet-950/20 hover:bg-violet-100 dark:hover:bg-violet-950/40 text-xs font-semibold transition-all"
+          >
+            <Plus className="h-3.5 w-3.5" /> বহুপদী সমাপ্তিসূচক
+          </button>
+          <button
+            type="button"
+            onClick={() => addItem('stem_based')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dashed border-amber-400 text-amber-700 dark:text-amber-400 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-950/20 hover:bg-amber-100 dark:hover:bg-amber-950/40 text-xs font-semibold transition-all"
+          >
+            <Plus className="h-3.5 w-3.5" /> অভিন্ন তথ্যভিত্তিক
+          </button>
+        </div>
+      </div>
+
+      {/* Empty State */}
+      {visibleItems.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-14 text-muted-foreground border-2 border-dashed rounded-xl">
+          <CheckSquare className="h-10 w-10 mb-3 opacity-30" />
+          <p className="text-sm font-semibold">
+            {categoryFilter === 'all' ? 'কোনো MCQ নেই' : `কোনো ${MCQ_CATEGORY_TABS.find(t => t.key === categoryFilter)?.label} MCQ নেই`}
+          </p>
+          <p className="text-xs mt-1">উপরের বাটন ক্লিক করে MCQ যোগ করুন</p>
         </div>
       )}
+
+      {/* MCQ List */}
       <AnimatePresence mode="popLayout">
-        {items.map((item, index) => (
-          <motion.div
-            key={item._key}
-            layout
-            initial={{ opacity: 0, y: -10, height: 0 }}
-            animate={{ opacity: 1, y: 0, height: 'auto' }}
-            exit={{ opacity: 0, y: -10, height: 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <McqItem
-              item={item} index={index}
-              onChange={(updated) => updateItem(item._key, updated)}
-              onRemove={() => removeItem(item._key)}
-            />
-          </motion.div>
-        ))}
+        {visibleItems.map((item, index) => {
+          const globalIndex = items.indexOf(item)
+          return (
+            <motion.div
+              key={item._key}
+              layout
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10, height: 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              <McqItem
+                item={item}
+                index={globalIndex}
+                onChange={(updated) => updateItem(item._key, updated)}
+                onRemove={() => removeItem(item._key)}
+              />
+            </motion.div>
+          )
+        })}
       </AnimatePresence>
-      <Button variant="outline" size="sm" onClick={addItem} className="gap-2 w-full border-dashed">
-        <Plus className="h-4 w-4" /> Add MCQ
-      </Button>
+
       {items.length > 0 && (
-        <p className="text-xs text-muted-foreground text-center">{items.length} question{items.length !== 1 ? 's' : ''} added</p>
+        <div className="flex items-center justify-center gap-4 pt-1">
+          <span className="text-xs text-muted-foreground">
+            মোট: {items.length}টি প্রশ্ন
+            {counts.single > 0 && ` · সাধারণ: ${counts.single}`}
+            {counts.multiple_statement > 0 && ` · বহুপদী: ${counts.multiple_statement}`}
+            {counts.stem_based > 0 && ` · তথ্যভিত্তিক: ${counts.stem_based}`}
+          </span>
+        </div>
       )}
     </div>
   )
@@ -1004,64 +1693,78 @@ function TabPanel({
   isEdit: boolean
 }) {
   // ─── Main Book Q&A entries ────────────────────────────────────────
-  interface MainBookEntry {
-    question: string
-    videoUrl: string
-    solution: string
-  }
 
   const parseEntries = (desc: string): MainBookEntry[] => {
     try {
       const parsed = JSON.parse(desc)
-      if (Array.isArray(parsed)) return parsed
-      // If it's an object with a `questions` array, extract that
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (Array.isArray(parsed)) {
+        return parsed.map((e: any, idx: number) => {
+          if (e.type === 'single' || e.type === 'group') {
+            return e as MainBookEntry
+          }
+          // Upgrade legacy entry
+          return {
+            id: e.id || `entry-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 9)}`,
+            type: 'single',
+            question: e.question || '',
+            solution: e.solution || '',
+            videoUrl: e.videoUrl || '',
+          }
+        })
+      }
+      if (parsed && typeof parsed === 'object') {
         if (parsed.questions && Array.isArray(parsed.questions)) {
-          return parsed.questions
+          return parsed.questions.map((e: any, idx: number) => {
+            if (e.type === 'single' || e.type === 'group') return e as MainBookEntry
+            return {
+              id: e.id || `entry-${Date.now()}-${idx}`,
+              type: 'single',
+              question: e.question || '',
+              solution: e.solution || '',
+              videoUrl: e.videoUrl || '',
+            }
+          })
         }
-        // Handle corrupted format: {"0": {...}, "1": {...}, chapterType: "main_book", ...}
-        // where array was spread into numeric keys alongside metadata
+        // Handle corrupted numeric spread format
         const numericEntries = Object.entries(parsed)
           .filter(([key, val]) => /^\d+$/.test(key) && val && typeof val === 'object')
-          .map(([_, val]) => val) as MainBookEntry[]
-        if (numericEntries.length > 0) return numericEntries
+          .map(([_, val]) => val) as any[]
+        if (numericEntries.length > 0) {
+          return numericEntries.map((e: any, idx: number) => {
+            if (e.type === 'single' || e.type === 'group') return e as MainBookEntry
+            return {
+              id: e.id || `entry-${Date.now()}-${idx}`,
+              type: 'single',
+              question: e.question || '',
+              solution: e.solution || '',
+              videoUrl: e.videoUrl || '',
+            }
+          })
+        }
       }
-    } catch { /* not JSON, treat as legacy */ }
-    // Legacy: if description has content, treat as single entry question
-    if (desc && desc.trim()) return [{ question: desc, videoUrl: '', solution: '' }]
-    return [{ question: '', videoUrl: '', solution: '' }]
+    } catch { /* legacy plain text */ }
+
+    if (desc && desc.trim()) {
+      return [
+        {
+          id: `entry-${Date.now()}`,
+          type: 'single',
+          question: desc,
+          solution: '',
+          videoUrl: '',
+        },
+      ]
+    }
+    return []
   }
 
   const [mainBookEntries, setMainBookEntries] = useState<MainBookEntry[]>(() =>
     parseEntries(formData.description || '')
   )
-  const [openSolutions, setOpenSolutions] = useState<Record<number, boolean>>({})
 
   const syncEntries = (updated: MainBookEntry[]) => {
     setMainBookEntries(updated)
     onFormDataChange({ ...formData, description: JSON.stringify(updated) })
-  }
-
-  const updateEntry = (idx: number, field: keyof MainBookEntry, value: string) => {
-    const updated = mainBookEntries.map((e, i) => i === idx ? { ...e, [field]: value } : e)
-    syncEntries(updated)
-  }
-
-  const addEntry = () => {
-    syncEntries([...mainBookEntries, { question: '', videoUrl: '', solution: '' }])
-  }
-
-  const removeEntry = (idx: number) => {
-    syncEntries(mainBookEntries.filter((_, i) => i !== idx))
-    setOpenSolutions((prev) => {
-      const next = { ...prev }
-      delete next[idx]
-      return next
-    })
-  }
-
-  const toggleSolution = (idx: number) => {
-    setOpenSolutions((prev) => ({ ...prev, [idx]: !prev[idx] }))
   }
 
   return (
@@ -1074,110 +1777,10 @@ function TabPanel({
         transition={{ duration: 0.2 }}
       >
         {activeTab === 'main_book' && (
-          <div className="space-y-4">
-            {mainBookEntries.map((entry, idx) => (
-              <div key={idx} className="rounded-xl border bg-card overflow-hidden">
-                {/* Header */}
-                <div className="flex items-center justify-between px-4 py-2.5 bg-muted/30 border-b">
-                  <div className="flex items-center gap-2">
-                    <GripVertical className="h-4 w-4 text-muted-foreground/50" />
-                    <Badge variant="outline" className="font-mono text-xs h-5">
-                      Q{idx + 1}
-                    </Badge>
-                  </div>
-                  <Button
-                    variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive"
-                    onClick={() => removeEntry(idx)}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-
-                <div className="p-4 space-y-4">
-                  {/* Row 1: Question + Video URL + Solution Toggle */}
-                  <div className="space-y-3">
-                    <Label className="text-xs font-medium text-muted-foreground">Question</Label>
-                    <RichTextEditor
-                      value={entry.question}
-                      onChange={(v) => updateEntry(idx, 'question', v)}
-                      placeholder="Enter the question..."
-                      minHeight={80}
-                      showMathButton
-                    />
-                  </div>
-
-                  <div className="flex items-end gap-3">
-                    {/* Video Lecture URL */}
-                    <div className="flex-1 space-y-1.5">
-                      <Label className="text-xs font-medium text-muted-foreground">Video Lecture</Label>
-                      <div className="relative">
-                        <Youtube className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          value={entry.videoUrl}
-                          onChange={(e) => updateEntry(idx, 'videoUrl', e.target.value)}
-                          placeholder="https://www.youtube.com/watch?v=..."
-                          className="h-9 pl-8"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Solution Toggle Button */}
-                    <Button
-                      type="button"
-                      variant={openSolutions[idx] ? 'default' : 'outline'}
-                      size="sm"
-                      onClick={() => toggleSolution(idx)}
-                      className={cn(
-                        'h-9 gap-1.5 shrink-0',
-                        openSolutions[idx]
-                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                          : 'text-emerald-600 border-emerald-300 hover:bg-emerald-50'
-                      )}
-                    >
-                      <Lightbulb className="h-3.5 w-3.5" />
-                      {openSolutions[idx] ? 'Hide Solution' : 'Solution'}
-                    </Button>
-                  </div>
-
-                  {/* Row 2: Solution (collapsible like FAQ) */}
-                  <AnimatePresence>
-                    {openSolutions[idx] && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="overflow-hidden"
-                      >
-                        <div className="pt-2 space-y-2 border-t">
-                          <Label className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                            Solution
-                          </Label>
-                          <RichTextEditor
-                            value={entry.solution}
-                            onChange={(v) => updateEntry(idx, 'solution', v)}
-                            placeholder="Write the detailed solution, step-by-step reasoning, formulas..."
-                            minHeight={100}
-                            showMathButton
-                          />
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              </div>
-            ))}
-
-            {/* Add Question Button */}
-            <Button
-              type="button"
-              variant="outline"
-              onClick={addEntry}
-              className="w-full h-11 gap-2 border-dashed text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50/50"
-            >
-              <Plus className="h-4 w-4" /> Add Question
-            </Button>
-          </div>
+          <MainBookQAEditor
+            entries={mainBookEntries}
+            onChange={syncEntries}
+          />
         )}
 
         {activeTab === 'creative_question' && (
@@ -1211,12 +1814,14 @@ export default function EditChapterModal({
   // Form state
   const [formData, setFormData] = useState<ChapterData>({
     name: '', slug: '', subjectId: '', description: '', sidebarContent: '', icon: '', color: '#10B981',
+    imageUrl: '', imageVisible: true,
     order: 0, isActive: true, chapterType: 'main_book', visibility: true,
     metaTitle: '', metaDescription: '', keywords: '',
+    mainBookPdfUrl: '', mcqPdfUrl: '', cqPdfUrl: '',
   })
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<ChapterTab>('main_book')
+  const [activeTab, setActiveTab] = useState<ChapterTab>('general')
 
   // Creative Questions & MCQs
   const [creativeQuestions, setCreativeQuestions] = useState<CreativeQuestionForm[]>([])
@@ -1274,7 +1879,9 @@ export default function EditChapterModal({
     }
 
     setActiveTab(tab)
-    updateField('chapterType', tab)
+    if (tab === 'main_book' || tab === 'creative_question' || tab === 'mcq') {
+      updateField('chapterType', tab)
+    }
   }
 
   // ─── Load Chapter Data ──────────────────────────────────────────────
@@ -1310,12 +1917,16 @@ export default function EditChapterModal({
             id: data.id, name: data.name || '', slug: data.slug || '',
             subjectId: data.subjectId || '', description: data.description || '',
             sidebarContent: data.sidebarContent || '', icon: data.icon || '', color: data.color || '#10B981',
+            imageUrl: data.imageUrl || '', imageVisible: data.imageVisible !== false,
             order: data.order ?? 0, isActive: data.isActive !== false,
             chapterType, visibility, metaTitle, metaDescription, keywords,
+            mainBookPdfUrl: data.mainBookPdfUrl || '',
+            mcqPdfUrl: data.mcqPdfUrl || '',
+            cqPdfUrl: data.cqPdfUrl || '',
           }
 
           setFormData(loaded)
-          setActiveTab((chapterType as ChapterTab) || 'main_book')
+          setActiveTab((chapter as any)?.initialTab || 'general')
 
           // Derive selectedClassId from subjects prop for initial lookup
           if (data.subjectId) {
@@ -1361,46 +1972,53 @@ export default function EditChapterModal({
 
           // Load MCQs
           const loadedMcq: McqForm[] = (mcqData || []).map((m: any) => {
-            // Parse options from JSON or fallback to legacy fields
+            // Parse options from JSON or fallback to legacy A/B/C/D fields
             let options: McqOptionItem[] = []
             if (m.options) {
+              try { options = JSON.parse(m.options) } catch { options = [] }
+            }
+            if (options.length === 0) {
+              options = [
+                { label: 'ক', text: m.optionA || '' },
+                { label: 'খ', text: m.optionB || '' },
+                { label: 'গ', text: m.optionC || '' },
+                { label: 'ঘ', text: m.optionD || '' }
+              ]
+            }
+            // Parse statements
+            let statements: string[] = ['', '', '']
+            if (m.statements) {
+              try { statements = JSON.parse(m.statements) } catch { statements = ['', '', ''] }
+            }
+            // Parse subMcqs
+            let subMcqs: McqSubQuestion[] = [makeDefaultSubMcq()]
+            if (m.subMcqs) {
               try {
-                options = JSON.parse(m.options)
-              } catch { options = [] }
-            }
-            // Fallback: if no dynamic options, build from legacy A/B/C/D
-            if (options.length === 0) {
-              if (m.optionA) options.push({ label: 'A', text: m.optionA })
-              if (m.optionB) options.push({ label: 'B', text: m.optionB })
-              if (m.optionC) options.push({ label: 'C', text: m.optionC })
-              if (m.optionD) options.push({ label: 'D', text: m.optionD })
-            }
-            if (options.length === 0) {
-              options = [{ label: 'A', text: '' }, { label: 'B', text: '' }]
+                const parsed = JSON.parse(m.subMcqs)
+                if (Array.isArray(parsed) && parsed.length > 0) subMcqs = parsed
+              } catch { /* use default */ }
             }
             return {
-              id: m.id, _key: uniqueKey(), question: m.question || '',
+              id: m.id,
+              _key: uniqueKey(),
+              mcqType: (m.mcqType as McqType) || 'single',
+              question: m.question || '',
               options,
-              correctAnswer: m.correctAnswer || 'A', explanation: m.explanation || '',
+              correctAnswer: m.correctAnswer || 'ক',
+              statements,
+              correctCombination: m.correctCombination || '',
+              stem: m.stem || '',
+              subMcqs,
+              explanation: m.explanation || '',
               videoUrl: m.videoUrl || '',
               marks: m.marks ?? 1,
               board_name: m.board_name || '',
               exam_year: m.exam_year ? String(m.exam_year) : '',
-              sourceType: m.sourceType || 'custom',
+              sourceType: m.sourceType || 'board',
             }
           })
-          setMcqs(loadedMcq.length > 0 ? loadedMcq : [{
-            _key: uniqueKey(), question: '',
-            options: [{ label: 'A', text: '' }, { label: 'B', text: '' }],
-            correctAnswer: 'A', explanation: '', videoUrl: '', marks: 1,
-            board_name: '', exam_year: new Date().getFullYear().toString(), sourceType: 'board'
-          }])
-          tabDataRef.current.mcqs = loadedMcq.length > 0 ? loadedMcq : [{
-            _key: uniqueKey(), question: '',
-            options: [{ label: 'A', text: '' }, { label: 'B', text: '' }],
-            correctAnswer: 'A', explanation: '', videoUrl: '', marks: 1,
-            board_name: '', exam_year: new Date().getFullYear().toString(), sourceType: 'board'
-          }]
+          setMcqs(loadedMcq.length > 0 ? loadedMcq : [makeDefaultMcq()])
+          tabDataRef.current.mcqs = loadedMcq.length > 0 ? loadedMcq : [makeDefaultMcq()]
 
           initialDataRef.current = JSON.stringify(loaded)
           setUnsavedChanges(false)
@@ -1428,9 +2046,9 @@ export default function EditChapterModal({
         setSelectedClassId('')
       }
       setFormData(initial)
-      setActiveTab('main_book')
+      setActiveTab('general')
       const defaultCq = [{ _key: uniqueKey(), label: 'A', question: '', answer: '', marks: 10, explanation: '', subQuestions: [] as { label: string; text: string }[], board_name: '', exam_year: new Date().getFullYear().toString(), sourceType: 'board' }]
-      const defaultMcq = [{ _key: uniqueKey(), question: '', options: [{ label: 'A', text: '' }, { label: 'B', text: '' }], correctAnswer: 'A', explanation: '', videoUrl: '', marks: 1, board_name: '', exam_year: new Date().getFullYear().toString(), sourceType: 'board' }]
+      const defaultMcq = [makeDefaultMcq()]
       setCreativeQuestions(defaultCq)
       setMcqs(defaultMcq)
       tabDataRef.current = { creativeQuestions: defaultCq, mcqs: defaultMcq }
@@ -1488,7 +2106,11 @@ export default function EditChapterModal({
         body: JSON.stringify({
           name: formData.name, slug: formData.slug, subjectId: formData.subjectId,
           description, sidebarContent: formData.sidebarContent, icon: formData.icon, color: formData.color,
+          imageUrl: formData.imageUrl || null, imageVisible: formData.imageVisible !== false,
           order: formData.order, isActive: formData.isActive,
+          mainBookPdfUrl: formData.mainBookPdfUrl || null,
+          mcqPdfUrl: formData.mcqPdfUrl || null,
+          cqPdfUrl: formData.cqPdfUrl || null,
         }),
       })
 
@@ -1509,7 +2131,7 @@ export default function EditChapterModal({
     const newErrors: Record<string, string> = {}
     if (!formData.name.trim()) newErrors.name = 'Chapter name is required'
     if (!formData.slug.trim()) newErrors.slug = 'Slug is required'
-    if (!/^[a-z0-9-]+$/.test(formData.slug)) newErrors.slug = 'Only lowercase letters, numbers, and hyphens allowed'
+    if (!/^[a-z0-9.-]+$/.test(formData.slug)) newErrors.slug = 'Only lowercase letters, numbers, hyphens, and dots allowed'
     if (!formData.subjectId) newErrors.subjectId = 'Subject is required'
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
@@ -1519,6 +2141,10 @@ export default function EditChapterModal({
   const handleSave = async () => {
     if (!validate()) { toast.error('Please fix the validation errors'); return }
     setSaving(true)
+
+    // ── Sync live tab data into ref before saving ──
+    tabDataRef.current.creativeQuestions = creativeQuestions
+    tabDataRef.current.mcqs = mcqs
 
     try {
       // Build description with metadata (store questions array separately)
@@ -1550,7 +2176,11 @@ export default function EditChapterModal({
       const payload = {
         name: formData.name, slug: formData.slug, subjectId: formData.subjectId,
         description, sidebarContent: formData.sidebarContent, icon: formData.icon, color: formData.color,
-        order: formData.order, isActive: formData.isActive,
+        imageUrl: formData.imageUrl || null, imageVisible: formData.imageVisible !== false,
+        order: formData.order === '' ? 0 : (formData.order ?? 0), isActive: formData.isActive,
+        mainBookPdfUrl: formData.mainBookPdfUrl || null,
+        mcqPdfUrl: formData.mcqPdfUrl || null,
+        cqPdfUrl: formData.cqPdfUrl || null,
       }
 
       let res
@@ -1575,8 +2205,8 @@ export default function EditChapterModal({
       const chapterId = savedChapter.id || formData.id
 
       // Always save creative questions if any have content (regardless of active tab)
-      const cqToSave = activeTab === 'creative_question' ? creativeQuestions : tabDataRef.current.creativeQuestions
-      if (cqToSave.some(cq => cq.question.trim())) {
+      const cqToSave = tabDataRef.current.creativeQuestions
+      if (cqToSave.some(cq => htmlToPlainText(cq.question))) {
         try {
           const existingRes = await fetch(`/api/creative-questions?chapterId=${chapterId}`)
           if (existingRes.ok) {
@@ -1588,30 +2218,53 @@ export default function EditChapterModal({
         } catch { /* ignore */ }
 
         for (const cq of cqToSave) {
-          if (cq.question.trim()) {
-            await fetch('/api/creative-questions', {
+          if (htmlToPlainText(cq.question)) {
+            const filteredSubs = cq.subQuestions.filter(sq => htmlToPlainText(sq.text))
+            const labelToSegment: Record<string, string> = {
+              'ক': 'segmentK', 'খ': 'segmentKh', 'গ': 'segmentG', 'ঘ': 'segmentGh',
+            }
+            const segmentPayload: Record<string, string | null> = {
+              segmentK: null, segmentKh: null, segmentG: null, segmentGh: null,
+            }
+            for (const sq of filteredSubs) {
+              const key = labelToSegment[sq.label]
+              if (key) segmentPayload[key] = sq.text
+            }
+
+            const res = await fetch('/api/creative-questions', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 chapterId, label: cq.label, question: cq.question,
                 answer: cq.answer, marks: cq.marks, explanation: cq.explanation,
-                subQuestions: cq.subQuestions.filter(sq => sq.text.trim()),
-                subQuestionA: cq.subQuestions[0]?.text || null,
-                subQuestionB: cq.subQuestions[1]?.text || null,
-                subQuestionC: cq.subQuestions[2]?.text || null,
+                subQuestions: filteredSubs,
+                subQuestionA: filteredSubs[0]?.text || null,
+                subQuestionB: filteredSubs[1]?.text || null,
+                subQuestionC: filteredSubs[2]?.text || null,
+                ...segmentPayload,
                 difficulty: 'medium', isActive: true,
                 board_name: cq.board_name || null,
                 exam_year: cq.exam_year ? parseInt(cq.exam_year) : null,
                 sourceType: cq.sourceType || 'custom',
               }),
-            }).catch(() => {})
+            })
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}))
+              toast.error(err.error || 'Failed to save a creative question')
+            }
           }
         }
       }
 
       // Always save MCQs if any have content (regardless of active tab)
-      const mcqToSave = activeTab === 'mcq' ? mcqs : tabDataRef.current.mcqs
-      if (mcqToSave.some(m => m.question.trim())) {
+      const mcqToSave = tabDataRef.current.mcqs
+      const hasContent = mcqToSave.some(m =>
+        htmlToPlainText(m.question) ||
+        htmlToPlainText(m.stem) ||
+        m.statements?.some((s: string) => htmlToPlainText(s)) ||
+        m.subMcqs?.some(s => htmlToPlainText(s.question))
+      )
+      if (hasContent) {
         try {
           const existingRes = await fetch(`/api/mcq-questions?chapterId=${chapterId}`)
           if (existingRes.ok) {
@@ -1623,25 +2276,48 @@ export default function EditChapterModal({
         } catch { /* ignore */ }
 
         for (const mcq of mcqToSave) {
-          if (mcq.question.trim()) {
-            await fetch('/api/mcq-questions', {
+          const hasQ = htmlToPlainText(mcq.question) || htmlToPlainText(mcq.stem) || mcq.subMcqs?.some(s => htmlToPlainText(s.question))
+          if (hasQ) {
+            const isStem = mcq.mcqType === 'stem_based'
+            const finalQuestion = isStem ? (mcq.stem || 'Stem Question') : mcq.question
+            const finalOptionA = isStem ? 'N/A' : (mcq.options[0]?.text || '')
+            const finalOptionB = isStem ? 'N/A' : (mcq.options[1]?.text || '')
+            const finalOptionC = isStem ? null : (mcq.options[2]?.text || null)
+            const finalOptionD = isStem ? null : (mcq.options[3]?.text || null)
+
+            const res = await fetch('/api/mcq-questions', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                chapterId, question: mcq.question,
-                options: mcq.options.filter(o => o.text.trim()),
-                optionA: mcq.options[0]?.text || '',
-                optionB: mcq.options[1]?.text || '',
-                optionC: mcq.options[2]?.text || null,
-                optionD: mcq.options[3]?.text || null,
-                correctAnswer: mcq.correctAnswer, explanation: mcq.explanation,
+                chapterId,
+                mcqType: mcq.mcqType || 'single',
+                question: finalQuestion,
+                options: JSON.stringify(mcq.options.filter(o => htmlToPlainText(o.text))),
+                optionA: finalOptionA,
+                optionB: finalOptionB,
+                optionC: finalOptionC,
+                optionD: finalOptionD,
+                correctAnswer: mcq.correctAnswer,
+                // multiple_statement
+                statements: JSON.stringify(mcq.statements || []),
+                correctCombination: mcq.correctCombination || null,
+                // stem_based
+                stem: mcq.stem || null,
+                subMcqs: JSON.stringify(mcq.subMcqs || []),
+                explanation: mcq.explanation,
                 videoUrl: mcq.videoUrl || null,
-                marks: mcq.marks, difficulty: 'medium', isActive: true,
+                marks: mcq.marks,
+                difficulty: 'medium',
+                isActive: true,
                 board_name: mcq.board_name || null,
                 exam_year: mcq.exam_year ? parseInt(mcq.exam_year) : null,
-                sourceType: mcq.sourceType || 'custom',
+                sourceType: mcq.sourceType || 'board',
               }),
-            }).catch(() => {})
+            })
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}))
+              toast.error(err.error || 'Failed to save an MCQ question')
+            }
           }
         }
       }
@@ -1734,278 +2410,427 @@ export default function EditChapterModal({
             </div>
           </div>
 
-          {/* ── Content (scrollable body) ── */}
-          <div ref={formRef} className="flex-1 overflow-y-auto px-8 py-6 space-y-8">
+          {/* ── Content (split layout with Left Sidebar & Right Panel) ── */}
+          <div className="flex-1 flex overflow-hidden">
+            {/* Left Sidebar */}
+            <div className="w-[280px] shrink-0 border-r bg-muted/20 flex flex-col overflow-y-auto p-4 gap-1.5 max-sm:hidden">
+              {TABS.map((tab) => {
+                const isActive = activeTab === tab.id
+                const Icon = tab.icon
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => handleTabChange(tab.id)}
+                    className={cn(
+                      'flex items-start gap-3 p-3 rounded-xl text-left transition-all duration-200 border',
+                      isActive
+                        ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 border-emerald-100 dark:border-emerald-900/50 shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/80 border-transparent'
+                    )}
+                  >
+                    <Icon className="h-5 w-5 shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold leading-none">{tab.label}</p>
+                      <p className="text-[10px] text-muted-foreground mt-1 truncate">{tab.description}</p>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Right Panel */}
+            <div ref={formRef} className="flex-1 overflow-y-auto px-8 py-6 space-y-6">
               {loading ? <FormSkeleton /> : (
                 <>
-                  {/* SECTION 1: Basic Information */}
-                  <div className="rounded-xl border bg-card p-6 shadow-sm">
-                    <SectionHeader icon={Type} title="Basic Information" description="Set the chapter name and URL slug" />
-                    <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-5">
-                      <div className="space-y-2">
-                        <Label htmlFor="chapter-name" className="text-sm font-medium">
-                          Chapter Name <span className="text-destructive">*</span>
-                        </Label>
-                        <div className="relative">
-                          <Input id="chapter-name" value={formData.name}
-                            onChange={(e) => updateField('name', e.target.value)}
-                            placeholder="e.g. Quadratic Equations"
-                            className={cn('h-10 pr-8 transition-all', errors.name && 'border-destructive ring-destructive/20')}
-                          />
-                          {formData.name && <div className="absolute inset-y-0 right-2 flex items-center"><CheckCircle className="h-4 w-4 text-emerald-500" /></div>}
-                        </div>
-                        {errors.name && <p className="text-xs text-destructive mt-1">{errors.name}</p>}
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="chapter-slug" className="text-sm font-medium">
-                          Slug <span className="text-destructive">*</span>
-                        </Label>
-                        <div className="relative">
-                          <Input id="chapter-slug" value={formData.slug}
-                            onChange={(e) => { updateField('slug', e.target.value); setSlugManuallyEdited(true) }}
-                            placeholder="quadratic-equations"
-                            className={cn('h-10 pl-8 font-mono text-sm transition-all', errors.slug && 'border-destructive ring-destructive/20')}
-                          />
-                          <Hash className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        </div>
-                        {errors.slug && <p className="text-xs text-destructive mt-1">{errors.slug}</p>}
-                        {!slugManuallyEdited && formData.name && <p className="text-xs text-muted-foreground mt-1">Auto-generated from name</p>}
-                      </div>
-                    </div>
+                  {/* For Mobile: Simple Dropdown Selection instead of Left Sidebar */}
+                  <div className="sm:hidden mb-4">
+                    <Label className="text-xs font-semibold text-muted-foreground mb-1 block">Editor Section</Label>
+                    <Select value={activeTab} onValueChange={(v) => handleTabChange(v as ChapterTab)}>
+                      <SelectTrigger className="w-full h-10">
+                        <SelectValue placeholder="Select section" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TABS.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>
+                            {t.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
 
-                  {/* SECTION 2: Classification (no more Chapter Type dropdown) */}
-                  <div className="rounded-xl border bg-card p-6 shadow-sm">
-                    <SectionHeader icon={BookMarked} title="Classification" description="Assign the chapter to a class and subject" />
-                    <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-5">
-                      <div className="space-y-2">
-                        <Label className="text-sm font-medium">Class</Label>
-                        <Select
-                          value={selectedClassId}
-                          onValueChange={(classId) => {
-                            setSelectedClassId(classId)
-                            updateField('subjectId', '')
-                            // Auto-select if only one subject for this class
-                            const filtered = subjectsQuery.data?.filter(s => s.classId === classId) || []
-                            if (filtered.length === 1) updateField('subjectId', filtered[0].id)
-                          }}
-                        >
-                          <SelectTrigger className="h-10"><SelectValue placeholder="Select class" /></SelectTrigger>
-                          <SelectContent>
-                            {classes.map((cls) => (
-                              <SelectItem key={cls.id} value={cls.id}>
-                                <span className="flex items-center gap-2">{cls.icon && <span>{cls.icon}</span>}<span>{cls.name}</span></span>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                  {activeTab === 'general' && (
+                    <>
+                      {/* SECTION 1: Basic Information */}
+                      <div className="rounded-xl border bg-card p-6 shadow-sm">
+                        <SectionHeader icon={Type} title="Basic Information" description="Set the chapter name and URL slug" />
+                        <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-5">
+                          <div className="space-y-2">
+                            <Label htmlFor="chapter-name" className="text-sm font-medium">
+                              Chapter Name <span className="text-destructive">*</span>
+                            </Label>
+                            <div className="relative">
+                              <Input id="chapter-name" value={formData.name}
+                                onChange={(e) => updateField('name', e.target.value)}
+                                placeholder="e.g. Quadratic Equations"
+                                className={cn('h-10 pr-8 transition-all', errors.name && 'border-destructive ring-destructive/20')}
+                              />
+                              {formData.name && <div className="absolute inset-y-0 right-2 flex items-center"><CheckCircle className="h-4 w-4 text-emerald-500" /></div>}
+                            </div>
+                            {errors.name && <p className="text-xs text-destructive mt-1">{errors.name}</p>}
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="chapter-slug" className="text-sm font-medium">
+                              Slug <span className="text-destructive">*</span>
+                            </Label>
+                            <div className="relative">
+                              <Input id="chapter-slug" value={formData.slug}
+                                onChange={(e) => { updateField('slug', e.target.value); setSlugManuallyEdited(true) }}
+                                placeholder="quadratic-equations"
+                                className={cn('h-10 pl-8 font-mono text-sm transition-all', errors.slug && 'border-destructive ring-destructive/20')}
+                              />
+                              <Hash className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            </div>
+                            {errors.slug && <p className="text-xs text-destructive mt-1">{errors.slug}</p>}
+                            {!slugManuallyEdited && formData.name && <p className="text-xs text-muted-foreground mt-1">Auto-generated from name</p>}
+                          </div>
+                        </div>
                       </div>
-                      <div className="space-y-2">
-                        <Label className="text-sm font-medium">Subject <span className="text-destructive">*</span></Label>
-                        <Select
-                          value={formData.subjectId}
-                          onValueChange={(v) => updateField('subjectId', v)}
-                          disabled={!selectedClassId || subjectsQuery.isLoading}
-                        >
-                          <SelectTrigger className={cn('h-10', errors.subjectId && 'border-destructive ring-destructive/20')}>
-                            <SelectValue placeholder={
-                              !selectedClassId
-                                ? 'Select a class first'
-                                : subjectsQuery.isLoading
-                                  ? 'Loading subjects...'
-                                  : subjectsQuery.data?.length === 0
-                                    ? 'No subjects available'
-                                    : 'Select subject'
-                            } />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {subjectsQuery.isLoading ? (
-                              <div className="flex items-center justify-center py-6">
-                                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+
+                      {/* SECTION 2: Classification */}
+                      <div className="rounded-xl border bg-card p-6 shadow-sm">
+                        <SectionHeader icon={BookMarked} title="Classification" description="Assign the chapter to a class and subject" />
+                        <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-5">
+                          <div className="space-y-2">
+                            <Label className="text-sm font-medium">Class</Label>
+                            <Select
+                              value={selectedClassId}
+                              onValueChange={(classId) => {
+                                setSelectedClassId(classId)
+                                updateField('subjectId', '')
+                                const filtered = subjectsQuery.data?.filter(s => s.classId === classId) || []
+                                if (filtered.length === 1) updateField('subjectId', filtered[0].id)
+                              }}
+                            >
+                              <SelectTrigger className="h-10"><SelectValue placeholder="Select class" /></SelectTrigger>
+                              <SelectContent>
+                                {classes.map((cls) => (
+                                  <SelectItem key={cls.id} value={cls.id}>
+                                    <span className="flex items-center gap-2">{cls.icon && <span>{cls.icon}</span>}<span>{cls.name}</span></span>
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-2">
+                            <Label className="text-sm font-medium">Subject <span className="text-destructive">*</span></Label>
+                            <Select
+                              value={formData.subjectId}
+                              onValueChange={(v) => updateField('subjectId', v)}
+                              disabled={!selectedClassId || subjectsQuery.isLoading}
+                            >
+                              <SelectTrigger className={cn('h-10', errors.subjectId && 'border-destructive ring-destructive/20')}>
+                                <SelectValue placeholder={
+                                  !selectedClassId
+                                    ? 'Select a class first'
+                                    : subjectsQuery.isLoading
+                                      ? 'Loading subjects...'
+                                      : subjectsQuery.data?.length === 0
+                                        ? 'No subjects available'
+                                        : 'Select subject'
+                                } />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {subjectsQuery.isLoading ? (
+                                  <div className="flex items-center justify-center py-6">
+                                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                                  </div>
+                                ) : subjectsQuery.data?.length === 0 ? (
+                                  <div className="py-4 text-center text-sm text-muted-foreground">
+                                    {selectedClassId ? 'No subjects for this class' : 'Select a class first'}
+                                  </div>
+                                ) : (
+                                  (subjectsQuery.data || []).map((sub) => (
+                                    <SelectItem key={sub.id} value={sub.id}>
+                                      <span className="flex items-center gap-2">{sub.icon && <span>{sub.icon}</span>}<span>{sub.name}</span></span>
+                                    </SelectItem>
+                                  ))
+                                )}
+                              </SelectContent>
+                            </Select>
+                            {errors.subjectId && <p className="text-xs text-destructive mt-1">{errors.subjectId}</p>}
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {activeTab === 'main_book' && (
+                    <div className="rounded-xl border bg-card p-6 shadow-sm">
+                      <SectionHeader icon={FileText} title="Main Book Content" description="Edit full chapter content with rich text, images, and math formulas" />
+                      <div className="mt-5">
+                        <TabPanel
+                          activeTab="main_book"
+                          formData={formData}
+                          creativeQuestions={creativeQuestions}
+                          mcqs={mcqs}
+                          onFormDataChange={setFormData}
+                          onCreativeQuestionsChange={setCreativeQuestions}
+                          onMcqsChange={setMcqs}
+                          isEdit={isEdit}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'creative_question' && (
+                    <div className="rounded-xl border bg-card p-6 shadow-sm">
+                      <SectionHeader icon={Lightbulb} title="Creative Questions" description="Add and manage creative questions for this chapter" />
+                      <div className="mt-5">
+                        <TabPanel
+                          activeTab="creative_question"
+                          formData={formData}
+                          creativeQuestions={creativeQuestions}
+                          mcqs={mcqs}
+                          onFormDataChange={setFormData}
+                          onCreativeQuestionsChange={setCreativeQuestions}
+                          onMcqsChange={setMcqs}
+                          isEdit={isEdit}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'mcq' && (
+                    <div className="rounded-xl border bg-card p-6 shadow-sm">
+                      <SectionHeader icon={CheckSquare} title="MCQ Questions" description="Add and manage multiple choice questions for this chapter" />
+                      <div className="mt-5">
+                        <TabPanel
+                          activeTab="mcq"
+                          formData={formData}
+                          creativeQuestions={creativeQuestions}
+                          mcqs={mcqs}
+                          onFormDataChange={setFormData}
+                          onCreativeQuestionsChange={setCreativeQuestions}
+                          onMcqsChange={setMcqs}
+                          isEdit={isEdit}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'sidebar' && (
+                    <div className="rounded-xl border bg-card p-6 shadow-sm">
+                      <SectionHeader icon={BookMarked} title="Chapter Sidebar Content" description="Rich content displayed in a sticky sidebar widget on the chapter page — notes, formulas, tables, images, tips" />
+                      <div className="mt-5">
+                        <RichTextEditor
+                          value={formData.sidebarContent || ''}
+                          onChange={(v) => updateField('sidebarContent', v)}
+                          placeholder="Write chapter notes, formulas, important instructions, or any content to show in the sidebar widget..."
+                          minHeight={300}
+                          showMathButton
+                        />
+                        <p className="text-xs text-muted-foreground mt-2">
+                          This content appears as a sticky widget on the right side of the chapter page (desktop)
+                          and as a floating button popup on mobile. Leave empty to hide the widget entirely.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'design' && (
+                    <>
+                      {/* SECTION 4: Visual Settings */}
+                      <div className="rounded-xl border bg-card p-6 shadow-sm">
+                        <SectionHeader icon={Palette} title="Visual Settings" description="Customize the chapter icon and accent color" />
+                        <div className="mt-4 flex items-center gap-6">
+                          <div className="space-y-2">
+                            <Label className="text-xs font-medium text-muted-foreground">Icon</Label>
+                            <EmojiPicker value={formData.icon || ''} onChange={(emoji) => updateField('icon', emoji)} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label className="text-xs font-medium text-muted-foreground">Color</Label>
+                            <ColorPicker value={formData.color || '#10B981'} onChange={(color) => updateField('color', color)} />
+                          </div>
+                          <div className="flex-1 min-h-[88px] flex items-center">
+                            <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-muted/50 border w-full">
+                              <div className="h-8 w-8 rounded-lg flex items-center justify-center text-lg shadow-sm"
+                                style={{ backgroundColor: formData.color || '#10B981' }}>
+                                <span className="filter brightness-200">{formData.icon || '📄'}</span>
                               </div>
-                            ) : subjectsQuery.data?.length === 0 ? (
-                              <div className="py-4 text-center text-sm text-muted-foreground">
-                                {selectedClassId ? 'No subjects for this class' : 'Select a class first'}
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium truncate">{formData.name || 'Chapter Preview'}</p>
+                                <p className="text-xs text-muted-foreground truncate">/{formData.slug || 'chapter-slug'}</p>
                               </div>
-                            ) : (
-                              (subjectsQuery.data || []).map((sub) => (
-                                <SelectItem key={sub.id} value={sub.id}>
-                                  <span className="flex items-center gap-2">{sub.icon && <span>{sub.icon}</span>}<span>{sub.name}</span></span>
-                                </SelectItem>
-                              ))
-                            )}
-                          </SelectContent>
-                        </Select>
-                        {errors.subjectId && <p className="text-xs text-destructive mt-1">{errors.subjectId}</p>}
-                        {subjectsQuery.isLoading && selectedClassId && (
-                          <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Loading subjects...
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* SECTION 3: Tabbed Content Editor */}
-                  <div className="rounded-xl border bg-card p-6 shadow-sm">
-                    <SectionHeader icon={activeTab === 'main_book' ? FileText : activeTab === 'creative_question' ? Lightbulb : CheckSquare}
-                      title={activeTab === 'main_book' ? 'Main Book Content' : activeTab === 'creative_question' ? 'Creative Questions' : 'MCQ Questions'}
-                      description={
-                        activeTab === 'main_book' ? 'Edit full chapter content with rich text, images, and math formulas'
-                          : activeTab === 'creative_question' ? 'Add and manage creative questions for this chapter'
-                          : 'Add and manage multiple choice questions for this chapter'
-                      }
-                    />
-                    <div className="mt-4 space-y-5">
-                      <SegmentedTabs activeTab={activeTab} onTabChange={handleTabChange} />
-                      <TabPanel
-                        activeTab={activeTab}
-                        formData={formData}
-                        creativeQuestions={creativeQuestions}
-                        mcqs={mcqs}
-                        onFormDataChange={setFormData}
-                        onCreativeQuestionsChange={setCreativeQuestions}
-                        onMcqsChange={setMcqs}
-                        isEdit={isEdit}
-                      />
-                    </div>
-                  </div>
-
-                  {/* SECTION 4: Visual Settings */}
-                  <div className="rounded-xl border bg-card p-6 shadow-sm">
-                    <SectionHeader icon={Palette} title="Visual Settings" description="Customize the chapter icon and accent color" />
-                    <div className="mt-4 flex items-center gap-6">
-                      <div className="space-y-2">
-                        <Label className="text-xs font-medium text-muted-foreground">Icon</Label>
-                        <EmojiPicker value={formData.icon || ''} onChange={(emoji) => updateField('icon', emoji)} />
-                      </div>
-                      <div className="space-y-2">
-                        <Label className="text-xs font-medium text-muted-foreground">Color</Label>
-                        <ColorPicker value={formData.color || '#10B981'} onChange={(color) => updateField('color', color)} />
-                      </div>
-                      <div className="flex-1 min-h-[88px] flex items-center">
-                        <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-muted/50 border w-full">
-                          <div className="h-8 w-8 rounded-lg flex items-center justify-center text-lg shadow-sm"
-                            style={{ backgroundColor: formData.color || '#10B981' }}>
-                            <span className="filter brightness-200">{formData.icon || '📄'}</span>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium truncate">{formData.name || 'Chapter Preview'}</p>
-                            <p className="text-xs text-muted-foreground truncate">/{formData.slug || 'chapter-slug'}</p>
-                          </div>
-                          <Badge variant="secondary" className="shrink-0 text-xs"
-                            style={{ backgroundColor: `${formData.color || '#10B981'}15`, color: formData.color || '#10B981', borderColor: `${formData.color || '#10B981'}30` }}
-                          >
-                            {formData.isActive ? 'Active' : 'Inactive'}
-                          </Badge>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* SECTION 5: Advanced Settings */}
-                  <div className="rounded-xl border bg-card p-6 shadow-sm">
-                    <SectionHeader icon={SlidersHorizontal} title="Advanced Settings" description="Configure display order, status, and visibility" />
-                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-6">
-                      <div className="space-y-2">
-                        <Label htmlFor="display-order" className="text-sm font-medium">Display Order</Label>
-                        <div className="relative">
-                          <Input id="display-order" type="number" min={0} max={999} value={formData.order}
-                            onChange={(e) => updateField('order', parseInt(e.target.value) || 0)} className="h-10 pl-8" />
-                          <Hash className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        </div>
-                        <p className="text-xs text-muted-foreground">Lower numbers appear first</p>
-                      </div>
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium">Status</Label>
-                        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
-                          <div className="flex items-center gap-2">
-                            <div className={cn('h-2 w-2 rounded-full transition-colors', formData.isActive ? 'bg-emerald-500' : 'bg-muted-foreground')} />
-                            <span className="text-sm font-medium">{formData.isActive ? 'Active' : 'Inactive'}</span>
-                          </div>
-                          <Switch checked={formData.isActive} onCheckedChange={(v) => updateField('isActive', v)} />
-                        </div>
-                      </div>
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium">Visibility</Label>
-                        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
-                          <div className="flex items-center gap-2">
-                            {formData.visibility !== false ? <Eye className="h-4 w-4 text-emerald-500" /> : <EyeOff className="h-4 w-4 text-muted-foreground" />}
-                            <span className="text-sm font-medium">{formData.visibility !== false ? 'Visible' : 'Hidden'}</span>
-                          </div>
-                          <Switch checked={formData.visibility !== false} onCheckedChange={(v) => updateField('visibility', v)} />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* SECTION 6: Chapter Sidebar Content */}
-                  <div className="rounded-xl border bg-card p-6 shadow-sm">
-                    <SectionHeader icon={BookMarked} title="Chapter Sidebar Content" description="Rich content displayed in a sticky sidebar widget on the chapter page — notes, formulas, tables, images, tips" />
-                    <div className="mt-4">
-                      <RichTextEditor
-                        value={formData.sidebarContent || ''}
-                        onChange={(v) => updateField('sidebarContent', v)}
-                        placeholder="Write chapter notes, formulas, important instructions, or any content to show in the sidebar widget..."
-                        minHeight={200}
-                        showMathButton
-                      />
-                      <p className="text-xs text-muted-foreground mt-2">
-                        This content appears as a sticky widget on the right side of the chapter page (desktop)
-                        and as a floating button popup on mobile. Leave empty to hide the widget entirely.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* SECTION 7: SEO (Collapsible) */}
-                  <div className="rounded-xl border bg-card p-6 shadow-sm">
-                    <Collapsible open={seoExpanded} onOpenChange={setSeoExpanded}>
-                      <CollapsibleTrigger asChild>
-                        <div className="w-full flex items-center justify-between cursor-pointer group">
-                          <SectionHeader icon={Globe} title="SEO Settings" description="Optimize search engine visibility" />
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className={cn('text-xs transition-all',
-                              (formData.metaTitle || formData.metaDescription || formData.keywords)
-                                ? 'border-emerald-200 text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-800'
-                                : 'text-muted-foreground'
-                            )}>
-                              {(formData.metaTitle || formData.metaDescription || formData.keywords) ? 'Configured' : 'Optional'}
-                            </Badge>
-                            {seoExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform" /> : <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform" />}
+                              <Badge variant="secondary" className="shrink-0 text-xs"
+                                style={{ backgroundColor: `${formData.color || '#10B981'}15`, color: formData.color || '#10B981', borderColor: `${formData.color || '#10B981'}30` }}
+                              >
+                                {formData.isActive ? 'Active' : 'Inactive'}
+                              </Badge>
+                            </div>
                           </div>
                         </div>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent className="mt-4">
-                        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }} className="space-y-4">
+                      </div>
+
+                      {/* SECTION 5: Advanced Settings */}
+                      <div className="rounded-xl border bg-card p-6 shadow-sm">
+                        <SectionHeader icon={SlidersHorizontal} title="Advanced Settings" description="Configure display order, status, and visibility" />
+                        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-6">
                           <div className="space-y-2">
-                            <Label htmlFor="meta-title" className="text-sm font-medium">Meta Title</Label>
-                            <Input id="meta-title" value={formData.metaTitle || ''}
-                              onChange={(e) => updateField('metaTitle', e.target.value)}
-                              placeholder="e.g. Quadratic Equations - Chapter 4 | EduLMS" className="h-10" />
-                            <p className="text-xs text-muted-foreground">Recommended: 50-60 characters. {formData.metaTitle?.length || 0}/60</p>
+                            <Label htmlFor="display-order" className="text-sm font-medium">Display Order</Label>
+                            <div className="relative">
+                              <Input id="display-order" type="number" min={0} max={999} value={formData.order ?? ''}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  updateField('order', val === '' ? '' : parseInt(val) || 0);
+                                }} className="h-10 pl-8" />
+                              <Hash className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            </div>
+                            <p className="text-xs text-muted-foreground">Lower numbers appear first</p>
+                          </div>
+                          <div className="space-y-3">
+                            <Label className="text-sm font-medium">Status</Label>
+                            <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                              <div className="flex items-center gap-2">
+                                <div className={cn('h-2 w-2 rounded-full transition-colors', formData.isActive ? 'bg-emerald-500' : 'bg-muted-foreground')} />
+                                <span className="text-sm font-medium">{formData.isActive ? 'Active' : 'Inactive'}</span>
+                              </div>
+                              <Switch checked={formData.isActive} onCheckedChange={(v) => updateField('isActive', v)} />
+                            </div>
+                          </div>
+                          <div className="space-y-3">
+                            <Label className="text-sm font-medium">Visibility</Label>
+                            <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                              <div className="flex items-center gap-2">
+                                {formData.visibility !== false ? <Eye className="h-4 w-4 text-emerald-500" /> : <EyeOff className="h-4 w-4 text-muted-foreground" />}
+                                <span className="text-sm font-medium">{formData.visibility !== false ? 'Visible' : 'Hidden'}</span>
+                              </div>
+                              <Switch checked={formData.visibility !== false} onCheckedChange={(v) => updateField('visibility', v)} />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* SECTION 6: Chapter Image Settings */}
+                      <div className="rounded-xl border bg-card p-6 shadow-sm">
+                        <SectionHeader icon={ImageIcon} title="Chapter Image" description="Add a preview image for this chapter" />
+                        <div className="mt-4 space-y-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="chapter-image-url" className="text-sm font-medium">Image URL</Label>
+                            <Input
+                              id="chapter-image-url"
+                              value={formData.imageUrl || ''}
+                              onChange={(e) => updateField('imageUrl', e.target.value)}
+                              placeholder="Enter image URL (https://...)"
+                              className="h-10"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                            <div className="flex items-center gap-2">
+                              {formData.imageVisible !== false ? <Eye className="h-4 w-4 text-emerald-500" /> : <EyeOff className="h-4 w-4 text-muted-foreground" />}
+                              <span className="text-sm font-medium">{formData.imageVisible !== false ? 'Show Image in UI' : 'Hide Image in UI'}</span>
+                            </div>
+                            <Switch
+                              checked={formData.imageVisible !== false}
+                              onCheckedChange={(v) => updateField('imageVisible', v)}
+                            />
+                          </div>
+                          {formData.imageUrl && (
+                            <div className="relative rounded-lg overflow-hidden border w-full max-h-36 flex items-center justify-center bg-muted/20">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={formData.imageUrl}
+                                alt="Preview"
+                                className="w-full h-36 object-cover"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
+                              {formData.imageVisible === false && (
+                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                  <span className="text-white text-xs font-bold px-2 py-1 bg-black/60 rounded">🙈 Hidden</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* SECTION 7: PDF Documents */}
+                      <div className="rounded-xl border bg-card p-6 shadow-sm">
+                        <SectionHeader icon={FileText} title="PDF Documents" description="Add read-only PDFs for each section. Students can view but not download." />
+                        <div className="mt-4 space-y-5">
+                          <div className="space-y-2">
+                            <Label htmlFor="mainbook-pdf-url" className="text-sm font-medium">Main Book PDF URL</Label>
+                            <Input
+                              id="mainbook-pdf-url"
+                              value={formData.mainBookPdfUrl || ""}
+                              onChange={(e) => updateField("mainBookPdfUrl", e.target.value)}
+                              placeholder="https://example.com/main-book.pdf"
+                              className="h-10"
+                            />
+                            <p className="text-xs text-muted-foreground">Displays a Read Main Book PDF button under the Main Book tab</p>
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="meta-description" className="text-sm font-medium">Meta Description</Label>
-                            <Textarea id="meta-description" value={formData.metaDescription || ''}
-                              onChange={(e) => updateField('metaDescription', e.target.value)}
-                              placeholder="A brief description for search engine results..." rows={3} className="resize-none" />
-                            <p className="text-xs text-muted-foreground">Recommended: 150-160 characters. {formData.metaDescription?.length || 0}/160</p>
+                            <Label htmlFor="mcq-pdf-url" className="text-sm font-medium">MCQ PDF URL</Label>
+                            <Input
+                              id="mcq-pdf-url"
+                              value={formData.mcqPdfUrl || ""}
+                              onChange={(e) => updateField("mcqPdfUrl", e.target.value)}
+                              placeholder="https://example.com/mcq.pdf"
+                              className="h-10"
+                            />
+                            <p className="text-xs text-muted-foreground">Displays a Read MCQ PDF button under the MCQ tab</p>
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="keywords" className="text-sm font-medium">Keywords</Label>
-                            <Input id="keywords" value={formData.keywords || ''}
-                              onChange={(e) => updateField('keywords', e.target.value)}
-                              placeholder="quadratic equations, algebra, mathematics, class 10" className="h-10" />
-                            <p className="text-xs text-muted-foreground">Comma-separated list of relevant keywords</p>
+                            <Label htmlFor="cq-pdf-url" className="text-sm font-medium">Creative Questions PDF URL</Label>
+                            <Input
+                              id="cq-pdf-url"
+                              value={formData.cqPdfUrl || ""}
+                              onChange={(e) => updateField("cqPdfUrl", e.target.value)}
+                              placeholder="https://example.com/creative.pdf"
+                              className="h-10"
+                            />
+                            <p className="text-xs text-muted-foreground">Displays a Read Creative Questions PDF button under the Creative tab</p>
                           </div>
-                        </motion.div>
-                      </CollapsibleContent>
-                    </Collapsible>
-                  </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {activeTab === 'seo' && (
+                    <div className="rounded-xl border bg-card p-6 shadow-sm">
+                      <SectionHeader icon={Globe} title="SEO Settings" description="Optimize search engine visibility" />
+                      <div className="mt-5 space-y-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="meta-title" className="text-sm font-medium">Meta Title</Label>
+                          <Input id="meta-title" value={formData.metaTitle || ''}
+                            onChange={(e) => updateField('metaTitle', e.target.value)}
+                            placeholder="e.g. Quadratic Equations - Chapter 4 | EduLMS" className="h-10" />
+                          <p className="text-xs text-muted-foreground">Recommended: 50-60 characters. {formData.metaTitle?.length || 0}/60</p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="meta-description" className="text-sm font-medium">Meta Description</Label>
+                          <Textarea id="meta-description" value={formData.metaDescription || ''}
+                            onChange={(e) => updateField('metaDescription', e.target.value)}
+                            placeholder="A brief description for search engine results..." rows={3} className="resize-none" />
+                          <p className="text-xs text-muted-foreground">Recommended: 150-160 characters. {formData.metaDescription?.length || 0}/160</p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="keywords" className="text-sm font-medium">Keywords</Label>
+                          <Input id="keywords" value={formData.keywords || ''}
+                            onChange={(e) => updateField('keywords', e.target.value)}
+                            placeholder="quadratic equations, algebra, mathematics, class 10" className="h-10" />
+                          <p className="text-xs text-muted-foreground">Comma-separated list of relevant keywords</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
+          </div>
 
           {/* ── Footer (sticky) ── */}
           {!loading && (

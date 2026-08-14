@@ -27,7 +27,7 @@ export async function PUT(
     await connectDB();
     const { id } = await params;
     const body = await request.json();
-    const updated = await Explanation.findByIdAndUpdate(id, body, { new: true }).lean();
+    const updated = await Explanation.findByIdAndUpdate(id, body, { new: true, strict: false }).lean();
     return NextResponse.json(toDoc(updated));
   } catch (error) {
     console.error('Error updating explanation:', error);

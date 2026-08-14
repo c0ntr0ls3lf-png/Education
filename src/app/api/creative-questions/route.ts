@@ -1,50 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB, CreativeQuestion, toDoc } from '@/lib/db';
+import { buildQuestionFilters, buildSortPipeline, normalizeQuestionMetadata } from '@/lib/query-helpers';
 
 export async function GET(request: NextRequest) {
   try {
     await connectDB();
     const { searchParams } = new URL(request.url);
-    const chapterId = searchParams.get('chapterId');
-    const difficulty = searchParams.get('difficulty');
-    const board = searchParams.get('board');
-    const year = searchParams.get('year');
+    
+    const where = buildQuestionFilters({
+      chapterId: searchParams.get('chapterId'),
+      difficulty: searchParams.get('difficulty'),
+      board: searchParams.get('board'),
+      year: searchParams.get('year'),
+    });
 
-    const where: Record<string, unknown> = {};
-    if (chapterId) where.chapterId = chapterId;
-    if (difficulty) where.difficulty = difficulty;
-
-    if (board && board !== 'all') {
-      where.board_name = { $regex: new RegExp('^' + board.replace(/-/g, ' ') + '$', 'i') };
-    }
-    if (year && year !== 'all') {
-      const parsedYear = parseInt(year, 10);
-      if (!isNaN(parsedYear)) {
-        where.exam_year = parsedYear;
-      }
-    }
-
-    const currentYear = new Date().getFullYear();
-    const pipeline: Record<string, unknown>[] = [
+    const pipeline = [
       { $match: where },
-      {
-        $addFields: {
-          sortPriority: {
-            $switch: {
-              branches: [
-                { case: { $and: [ { $eq: ['$sourceType', 'board'] }, { $eq: ['$exam_year', currentYear] } ] }, then: 1 },
-                { case: { $eq: ['$sourceType', 'board'] }, then: 2 },
-                { case: { $eq: ['$sourceType', 'school'] }, then: 3 },
-                { case: { $eq: ['$sourceType', 'model_test'] }, then: 4 },
-              ],
-              default: 5,
-            },
-          },
-        },
-      },
-      { $sort: { sortPriority: 1, exam_year: -1, order: 1, label: 1 } },
-      { $project: { sortPriority: 0 } },
+      ...buildSortPipeline(),
+      { $sort: { label: 1 } },
     ];
+    
     const creativeQuestions = await CreativeQuestion.aggregate(pipeline as any);
     return NextResponse.json(toDoc(creativeQuestions));
   } catch (error) {
@@ -62,19 +37,51 @@ export async function POST(request: NextRequest) {
       year, board, schoolName,
       boardName, questionYear, board_name, exam_year, sourceType,
       segmentK, segmentKh, segmentG, segmentGh,
+      solutionK, solutionKh, solutionG, solutionGh,
       marksK, marksKh, marksG, marksGh, videoUrl, tips,
     } = body;
 
-    if (!chapterId || !label || !question) {
-      return NextResponse.json({ error: 'chapterId, label, and question are required' }, { status: 400 });
+    if (!chapterId || !question) {
+      return NextResponse.json({ error: 'chapterId and question are required' }, { status: 400 });
     }
 
+    // Auto-generate label if empty or not provided
+    let finalLabel = label ? String(label).trim() : '';
+    if (!finalLabel) {
+      const count = await CreativeQuestion.countDocuments({ chapterId });
+      finalLabel = String.fromCharCode(65 + (count % 26)); // e.g. A, B, C...
+    }
+
+    // Normalize segment fields to subQuestions
     let finalSubA = subQuestionA || null;
     let finalSubB = subQuestionB || null;
     let finalSubC = subQuestionC || null;
     let finalSubQuestions = subQuestions || null;
 
-    if (subQuestions && typeof subQuestions === 'string') {
+    const hasSegments = segmentK || segmentKh || segmentG || segmentGh;
+    if (hasSegments) {
+      const arr: { label: string; text: string }[] = [];
+      if (segmentK) {
+        const fullText = solutionK ? `${segmentK} <hr> <strong>উত্তর:</strong> ${solutionK}` : segmentK;
+        arr.push({ label: 'ক', text: fullText });
+      }
+      if (segmentKh) {
+        const fullText = solutionKh ? `${segmentKh} <hr> <strong>উত্তর:</strong> ${solutionKh}` : segmentKh;
+        arr.push({ label: 'খ', text: fullText });
+      }
+      if (segmentG) {
+        const fullText = solutionG ? `${segmentG} <hr> <strong>উত্তর:</strong> ${solutionG}` : segmentG;
+        arr.push({ label: 'গ', text: fullText });
+      }
+      if (segmentGh) {
+        const fullText = solutionGh ? `${segmentGh} <hr> <strong>উত্তর:</strong> ${solutionGh}` : segmentGh;
+        arr.push({ label: 'ঘ', text: fullText });
+      }
+      finalSubQuestions = JSON.stringify(arr);
+      finalSubA = segmentK || null;
+      finalSubB = segmentKh || null;
+      finalSubC = segmentG || null;
+    } else if (subQuestions && typeof subQuestions === 'string') {
       try {
         const parsed = JSON.parse(subQuestions);
         if (Array.isArray(parsed)) {
@@ -90,23 +97,14 @@ export async function POST(request: NextRequest) {
       finalSubC = subQuestions[2]?.text || null;
     }
 
-    const finalBoardName = board_name || boardName || board || null;
-    let finalExamYear: number | null = null;
-    const rawYear = (exam_year !== undefined && exam_year !== null && exam_year !== '') ? exam_year : ((questionYear !== undefined && questionYear !== null && questionYear !== '') ? questionYear : null);
-    if (rawYear !== null) {
-      const parsed = parseInt(String(rawYear), 10);
-      if (!isNaN(parsed)) {
-        finalExamYear = parsed;
-      }
-    }
-    
-    // Auto Current Year Support: If year is empty
-    if (!finalExamYear) {
-      finalExamYear = new Date().getFullYear();
-    }
+    // Normalize metadata
+    const metadata = normalizeQuestionMetadata({ board, boardName, board_name, year, questionYear, exam_year, sourceType });
 
     const newCQ = await CreativeQuestion.create({
-      chapterId, label, question, answer,
+      chapterId,
+      label: finalLabel,
+      question,
+      answer,
       marks: marks ?? 10,
       difficulty: difficulty ?? 'medium',
       explanation,
@@ -121,13 +119,15 @@ export async function POST(request: NextRequest) {
       year: year || null,
       board: board || null,
       schoolName: schoolName || null,
-      board_name: finalBoardName,
-      exam_year: finalExamYear,
-      sourceType: sourceType || 'custom',
+      ...metadata,
       segmentK: segmentK || null,
       segmentKh: segmentKh || null,
       segmentG: segmentG || null,
       segmentGh: segmentGh || null,
+      solutionK: solutionK || null,
+      solutionKh: solutionKh || null,
+      solutionG: solutionG || null,
+      solutionGh: solutionGh || null,
       marksK: marksK ?? null,
       marksKh: marksKh ?? null,
       marksG: marksG ?? null,

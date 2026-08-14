@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB, User, toDoc } from '@/lib/db';
+import { requireAdmin } from '@/lib/api-auth';
 import { createHash } from 'crypto';
 
 function hashPassword(password: string): string {
@@ -8,24 +9,21 @@ function hashPassword(password: string): string {
 
 export async function GET(request: NextRequest) {
   try {
+    const authResult = await requireAdmin(request);
+    if (authResult instanceof NextResponse) return authResult;
+
     await connectDB();
     const { searchParams } = new URL(request.url);
     const role = searchParams.get('role');
     const classId = searchParams.get('classId');
     const userId = searchParams.get('userId');
-    const includePassword = searchParams.get('includePassword') === 'true';
 
     const where: Record<string, unknown> = {};
     if (role && role !== 'all') where.role = role;
     if (classId && classId !== 'all') where.classId = classId;
     if (userId) where._id = userId;
 
-    let query = User.find(where).sort({ createdAt: -1 });
-    if (!includePassword) {
-      query = query.select('-password');
-    }
-
-    const users = await query.lean();
+    const users = await User.find(where).select('-password').sort({ createdAt: -1 }).lean();
     return NextResponse.json(toDoc(users));
   } catch (error) {
     console.error('Error fetching users:', error);
@@ -37,7 +35,7 @@ export async function POST(request: NextRequest) {
   try {
     await connectDB();
     const body = await request.json();
-    const { name, email, password, phone, role, classId } = body;
+    const { name, email, password, phone, role, classId, selectedCategoryId } = body;
 
     if (!email) {
       return NextResponse.json({ error: 'Email is required' }, { status: 400 });
@@ -57,6 +55,8 @@ export async function POST(request: NextRequest) {
       phone: phone || null,
       role: role || 'student',
       classId: classId || null,
+      selectedCategoryId: selectedCategoryId || null,
+      isProfileComplete: true,
       provider: 'credentials',
       emailVerified: false,
     });

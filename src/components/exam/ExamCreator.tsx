@@ -31,6 +31,7 @@ interface ExamConfig {
 interface ExamCreatorProps {
   onGenerate: (config: ExamConfig) => void
   isGenerating?: boolean
+  defaultClassId?: string
 }
 
 interface ClassItem {
@@ -62,7 +63,7 @@ const examTypes = [
 
 
 
-export function ExamCreator({ onGenerate, isGenerating = false }: ExamCreatorProps) {
+export function ExamCreator({ onGenerate, isGenerating = false, defaultClassId }: ExamCreatorProps) {
   const [classes, setClasses] = useState<ClassItem[]>([])
   const [subjects, setSubjects] = useState<SubjectItem[]>([])
   const [chapters, setChapters] = useState<ChapterItem[]>([])
@@ -81,6 +82,13 @@ export function ExamCreator({ onGenerate, isGenerating = false }: ExamCreatorPro
   const [selectedClassId, setSelectedClassId] = useState<string>('')
   const [selectedSubjectId, setSelectedSubjectId] = useState<string>('')
   const [selectedChapterId, setSelectedChapterId] = useState<string>('all')
+
+  // Sync defaultClassId
+  useEffect(() => {
+    if (defaultClassId) {
+      setSelectedClassId(defaultClassId)
+    }
+  }, [defaultClassId])
 
   // Fetch classes on mount
   useEffect(() => {
@@ -192,88 +200,20 @@ export function ExamCreator({ onGenerate, isGenerating = false }: ExamCreatorPro
             <SelectValue placeholder={loadingClasses ? 'Loading classes...' : 'Choose a class'} />
           </SelectTrigger>
           <SelectContent>
-            {classes.map(cls => (
-              <SelectItem key={cls.id} value={cls.id}>
-                <span className="flex items-center gap-2">
-                  {cls.icon && <span>{cls.icon}</span>}
-                  <span>Class {cls.number} - {cls.name}</span>
-                </span>
-              </SelectItem>
-            ))}
+            {classes.map(cls => {
+              const isDisabled = defaultClassId ? cls.id !== defaultClassId : false
+              return (
+                <SelectItem key={cls.id} value={cls.id} disabled={isDisabled}>
+                  <span className="flex items-center gap-2">
+                    {cls.icon && <span>{cls.icon}</span>}
+                    <span>Class {cls.number} - {cls.name}</span>
+                  </span>
+                </SelectItem>
+              )
+            })}
           </SelectContent>
         </Select>
       </div>
-
-      {/* Step 2: Select Subject (shown after class) */}
-      {selectedClassId && (
-        <motion.div
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-        >
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
-            <BookOpen className="h-4 w-4" />
-            Step 2: Select Subject
-          </h3>
-          <Select
-            value={selectedSubjectId}
-            onValueChange={setSelectedSubjectId}
-            disabled={loadingSubjects || subjects.length === 0}
-          >
-            <SelectTrigger className="h-12 text-base">
-              <SelectValue placeholder={
-                loadingSubjects ? 'Loading subjects...'
-                : subjects.length === 0 ? 'No subjects available'
-                : 'Choose a subject'
-              } />
-            </SelectTrigger>
-            <SelectContent>
-              {subjects.map(sub => (
-                <SelectItem key={sub.id} value={sub.id}>
-                  <span className="flex items-center gap-2">
-                    {sub.icon && <span>{sub.icon}</span>}
-                    <span>{sub.name}</span>
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </motion.div>
-      )}
-
-      {/* Step 3: Select Chapter (shown after subject) */}
-      {selectedSubjectId && chapters.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-        >
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
-            <Layers className="h-4 w-4" />
-            Step 3: Select Chapter <span className="text-xs font-normal lowercase text-muted-foreground/70">(optional — pick "All Chapters" for entire subject)</span>
-          </h3>
-          <Select
-            value={selectedChapterId}
-            onValueChange={setSelectedChapterId}
-            disabled={loadingChapters}
-          >
-            <SelectTrigger className="h-12 text-base">
-              <SelectValue placeholder={loadingChapters ? 'Loading chapters...' : 'Choose a chapter'} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">
-                <span className="flex items-center gap-2 font-semibold text-emerald-600">
-                  <CheckCircle2 className="h-4 w-4" />
-                  All Chapters
-                </span>
-              </SelectItem>
-              {chapters.map(ch => (
-                <SelectItem key={ch.id} value={ch.id}>
-                  {ch.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </motion.div>
-      )}
 
       {/* Step 4: Exam Type */}
       <div>

@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB, Class, Subject, toDoc } from '@/lib/db';
+import { requireTeacherOrAdmin } from '@/lib/api-auth';
 
 export async function GET(request: NextRequest) {
   try {
     await connectDB();
     const { searchParams } = new URL(request.url);
     const includeSubjects = searchParams.get('include') === 'subjects';
+    const categoryId = searchParams.get('categoryId');
 
-    const classes = await Class.find().sort({ number: 1 }).lean();
+    const filter: Record<string, any> = {};
+    if (categoryId && categoryId !== 'all') {
+      filter.categoryId = categoryId;
+    }
+
+    const classes = await Class.find(filter).sort({ number: 1 }).lean();
 
     if (includeSubjects) {
       const subjects = await Subject.find().sort({ order: 1 }).lean();
@@ -29,9 +36,12 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const authResult = await requireTeacherOrAdmin(request);
+    if (authResult instanceof NextResponse) return authResult;
+
     await connectDB();
     const body = await request.json();
-    const { name, slug, number, description, icon, color, order, isActive } = body;
+    const { name, slug, number, description, icon, color, order, isActive, categoryId, subcategoryId } = body;
 
     if (!name || !slug || number === undefined) {
       return NextResponse.json({ error: 'name, slug, and number are required' }, { status: 400 });
@@ -41,6 +51,8 @@ export async function POST(request: NextRequest) {
       name, slug, number, description, icon, color,
       order: order ?? 0,
       isActive: isActive ?? true,
+      categoryId: categoryId || null,
+      subcategoryId: subcategoryId || null,
     });
 
     return NextResponse.json(toDoc(newClass.toObject()), { status: 201 });

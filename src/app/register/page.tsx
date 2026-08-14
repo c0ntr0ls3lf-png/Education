@@ -18,40 +18,76 @@ interface ClassOption {
   number: number
 }
 
+interface CategoryOption {
+  id: string
+  name: string
+}
+
 export default function RegisterPage() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState('')
   const [selectedClass, setSelectedClass] = useState('')
+  const [categories, setCategories] = useState<CategoryOption[]>([])
   const [classOptions, setClassOptions] = useState<ClassOption[]>([])
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [classesLoading, setClassesLoading] = useState(true)
+  const [categoriesLoading, setCategoriesLoading] = useState(true)
+  const [classesLoading, setClassesLoading] = useState(false)
   const router = useRouter()
   const { toast } = useToast()
 
-  // Fetch actual classes from the API
+  // Fetch categories on mount
   useEffect(() => {
-    async function fetchClasses() {
+    async function fetchCategories() {
       try {
-        const res = await fetch('/api/classes')
+        const res = await fetch('/api/categories')
+        if (res.ok) {
+          const data = await res.json()
+          setCategories(Array.isArray(data) ? data : [])
+        }
+      } catch {
+        // Silently fail
+      } finally {
+        setCategoriesLoading(false)
+      }
+    }
+    fetchCategories()
+  }, [])
+
+  // Fetch classes when selectedCategory changes
+  useEffect(() => {
+    if (!selectedCategory) {
+      setClassOptions([])
+      return
+    }
+    async function fetchClasses() {
+      setClassesLoading(true)
+      try {
+        const res = await fetch(`/api/classes?categoryId=${selectedCategory}`)
         if (res.ok) {
           const data = await res.json()
           setClassOptions(Array.isArray(data) ? data : [])
         }
       } catch {
-        // Silently fail - will show empty state
+        setClassOptions([])
       } finally {
         setClassesLoading(false)
       }
     }
     fetchClasses()
-  }, [])
+  }, [selectedCategory])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    if (!selectedCategory || !selectedClass) {
+      toast({ title: 'Error', description: 'Please select both Category and Class', variant: 'destructive' })
+      return
+    }
 
     if (password !== confirmPassword) {
       toast({ title: 'Error', description: 'Passwords do not match', variant: 'destructive' })
@@ -75,7 +111,8 @@ export default function RegisterPage() {
           password,
           phone,
           role: 'student',
-          classId: selectedClass || undefined,
+          classId: selectedClass,
+          selectedCategoryId: selectedCategory,
         }),
       })
 
@@ -168,12 +205,38 @@ export default function RegisterPage() {
                 </div>
               </div>
 
+              {/* Category Selection */}
+              <div className="space-y-2">
+                <Label htmlFor="category">Select Category</Label>
+                <Select value={selectedCategory} onValueChange={(val) => {
+                  setSelectedCategory(val)
+                  setSelectedClass('')
+                }}>
+                  <SelectTrigger>
+                    <SelectValue placeholder={categoriesLoading ? "Loading categories..." : "Choose a category"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.length === 0 && !categoriesLoading ? (
+                      <SelectItem value="none" disabled>
+                        No categories available
+                      </SelectItem>
+                    ) : (
+                      categories.map((cat) => (
+                        <SelectItem key={cat.id} value={cat.id}>
+                          {cat.name}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
               {/* Class Selection */}
               <div className="space-y-2">
-                <Label htmlFor="class">Select Class (optional)</Label>
-                <Select value={selectedClass} onValueChange={setSelectedClass}>
+                <Label htmlFor="class">Select Class</Label>
+                <Select value={selectedClass} onValueChange={setSelectedClass} disabled={!selectedCategory}>
                   <SelectTrigger>
-                    <SelectValue placeholder={classesLoading ? "Loading classes..." : "Choose your class"} />
+                    <SelectValue placeholder={classesLoading ? "Loading classes..." : !selectedCategory ? "Choose category first" : "Choose your class"} />
                   </SelectTrigger>
                   <SelectContent>
                     {classOptions.length === 0 && !classesLoading ? (
@@ -248,7 +311,7 @@ export default function RegisterPage() {
               <Button
                 type="submit"
                 className="w-full bg-emerald-600 hover:bg-emerald-700 gap-2"
-                disabled={isLoading || classesLoading}
+                disabled={isLoading || classesLoading || categoriesLoading}
               >
                 {isLoading ? (
                   <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />

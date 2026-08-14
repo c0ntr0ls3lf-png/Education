@@ -300,3 +300,81 @@ html {
   -ms-user-select: none;
   user-select: none;
 }
+
+/* ── Scrollbar hide utility (for mobile chip bar) ── */
+.scrollbar-hide {
+  -ms-overflow-style: none;   /* IE / Edge */
+  scrollbar-width: none;      /* Firefox */
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;              /* Chrome / Safari / Opera */
+}
+
+/* ── Blog Content Styling ── */
+.blog-content h1,
+.blog-content h2,
+.blog-content h3,
+.blog-content h4 {
+  font-weight: 700;
+  color: var(--color-gray-900);
+  margin-top: 1.75rem;
+  margin-bottom: 0.75rem;
+}
+:is(.dark *) .blog-content h1,
+:is(.dark *) .blog-content h2,
+:is(.dark *) .blog-content h3,
+:is(.dark *) .blog-content h4 {
+  color: #ffffff;
+}
+.blog-content h1 { font-size: 1.75rem; }
+.blog-content h2 { font-size: 1.4rem; }
+.blog-content h3 { font-size: 1.2rem; }
+
+.blog-content p {
+  margin-bottom: 1rem;
+  line-height: 1.7;
+}
+
+.blog-content ul {
+  list-style-type: disc;
+  margin-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.blog-content ol {
+  list-style-type: decimal;
+  margin-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.blog-content li {
+  margin-bottom: 0.35rem;
+}
+
+.blog-content blockquote {
+  border-left: 4px solid var(--color-emerald-500);
+  padding-left: 1rem;
+  font-style: italic;
+  color: var(--color-gray-600);
+  margin: 1.5rem 0;
+}
+:is(.dark *) .blog-content blockquote {
+  color: var(--color-gray-400);
+}
+
+.blog-content strong {
+  font-weight: 700;
+  color: var(--color-gray-900);
+}
+:is(.dark *) .blog-content strong {
+  color: #ffffff;
+}
+
+.blog-content a {
+  color: var(--color-emerald-600);
+  text-decoration: underline;
+}
+:is(.dark *) .blog-content a {
+  color: var(--color-emerald-400);
+}
+

@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import {
   Bold, Italic, Underline, List, ListOrdered, Link2, Image as ImageIcon,
   Sigma, Code, Eye, EyeOff,
@@ -24,13 +24,38 @@ export default function QuestionEditor({
   label,
 }: QuestionEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null)
+  const isInternalChange = useRef(false)
   const [isFocused, setIsFocused] = useState(false)
   const [isHtmlMode, setIsHtmlMode] = useState(false)
   const [showPreview, setShowPreview] = useState(false)
 
+  const emitChange = useCallback((html: string) => {
+    isInternalChange.current = true
+    onChange(html)
+  }, [onChange])
+
+  const syncFromEditor = useCallback(() => {
+    if (editorRef.current) {
+      emitChange(editorRef.current.innerHTML)
+    }
+  }, [emitChange])
+
+  // Sync external value into the editor without fighting user input
+  useEffect(() => {
+    if (isHtmlMode || !editorRef.current) return
+    if (isInternalChange.current) {
+      isInternalChange.current = false
+      return
+    }
+    if (isFocused) return
+    if (editorRef.current.innerHTML !== (value || '')) {
+      editorRef.current.innerHTML = value || ''
+    }
+  }, [value, isHtmlMode, isFocused])
+
   const execCommand = (command: string, val?: string) => {
     document.execCommand(command, false, val)
-    if (editorRef.current) onChange(editorRef.current.innerHTML)
+    syncFromEditor()
     editorRef.current?.focus()
   }
 
@@ -52,6 +77,7 @@ export default function QuestionEditor({
     e.preventDefault()
     const text = e.clipboardData.getData('text/plain')
     document.execCommand('insertText', false, text)
+    syncFromEditor()
   }
 
   const handleInsertMath = () => {
@@ -75,10 +101,11 @@ export default function QuestionEditor({
 
   const handleToggleHtml = () => {
     if (isHtmlMode) {
-      // Switching from HTML -> WYSIWYG: push textarea value into contentEditable
       if (editorRef.current) {
-        editorRef.current.innerHTML = value
+        editorRef.current.innerHTML = value || ''
       }
+    } else {
+      syncFromEditor()
     }
     setIsHtmlMode(!isHtmlMode)
   }
@@ -141,10 +168,8 @@ export default function QuestionEditor({
             )
           })}
 
-          {/* Spacer */}
           <div className="flex-1" />
 
-          {/* HTML Toggle */}
           <button
             type="button"
             onClick={handleToggleHtml}
@@ -160,7 +185,6 @@ export default function QuestionEditor({
             {isHtmlMode ? 'HTML' : 'Visual'}
           </button>
 
-          {/* Preview Toggle */}
           <button
             type="button"
             onClick={() => setShowPreview(!showPreview)}
@@ -177,7 +201,6 @@ export default function QuestionEditor({
           </button>
         </div>
 
-        {/* Editor Area */}
         {isHtmlMode ? (
           <textarea
             className="w-full p-4 text-sm font-mono leading-relaxed focus:outline-none resize-y bg-background"
@@ -192,11 +215,12 @@ export default function QuestionEditor({
             ref={editorRef}
             contentEditable
             suppressContentEditableWarning
-            onInput={() => {
-              if (editorRef.current) onChange(editorRef.current.innerHTML)
+            onInput={syncFromEditor}
+            onBlur={() => {
+              syncFromEditor()
+              setIsFocused(false)
             }}
             onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
             onPaste={handlePaste}
             data-placeholder={placeholder}
             className={cn(
@@ -208,12 +232,10 @@ export default function QuestionEditor({
               '[&_blockquote]:border-l-2 [&_blockquote]:border-emerald-500 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-muted-foreground'
             )}
             style={{ minHeight: minHeight + 'px' }}
-            dangerouslySetInnerHTML={{ __html: value }}
           />
         )}
       </div>
 
-      {/* LaTeX Preview */}
       {showPreview && value && (
         <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/10 p-3">
           <p className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 mb-1 uppercase tracking-wide">

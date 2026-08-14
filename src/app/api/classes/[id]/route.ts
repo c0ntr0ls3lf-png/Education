@@ -47,6 +47,8 @@ export async function PUT(
     if (updateData.color !== undefined) data.color = updateData.color;
     if (updateData.order !== undefined) data.order = updateData.order;
     if (updateData.isActive !== undefined) data.isActive = updateData.isActive;
+    if ('categoryId' in updateData) data.categoryId = updateData.categoryId || null;
+    if ('subcategoryId' in updateData) data.subcategoryId = updateData.subcategoryId || null;
 
     const updatedClass = await Class.findByIdAndUpdate(id, data, { new: true }).lean();
     return NextResponse.json(toDoc(updatedClass));

@@ -18,7 +18,12 @@ export default function TypingQuotes() {
 
   useEffect(() => {
     fetch('/api/quotes')
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) return []
+        const contentType = res.headers.get('content-type') || ''
+        if (!contentType.includes('application/json')) return []
+        return res.json()
+      })
       .then((data) => {
         const quoteArray = Array.isArray(data) ? data : []
         setQuotes(quoteArray)

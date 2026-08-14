@@ -17,8 +17,8 @@ export async function GET(
     // Fetch recent attempts
     const attempts = await ExamAttempt.find({ examId: id }).sort({ createdAt: -1 }).limit(10).lean()
 
-    let mcqQuestions: Record<string, unknown>[] = []
-    let creativeQuestions: Record<string, unknown>[] = []
+    let mcqQuestions: any[] = []
+    let creativeQuestions: any[] = []
 
     const sourceIds: string[] = JSON.parse(exam.sourceIds || '[]')
 

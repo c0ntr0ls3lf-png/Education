@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB, Setting } from '@/lib/db';
+import { requireAdmin } from '@/lib/api-auth';
 
 export async function GET() {
   try {
@@ -38,6 +39,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const authResult = await requireAdmin(request);
+    if (authResult instanceof NextResponse) return authResult;
+
     await connectDB();
     const body = await request.json();
 
